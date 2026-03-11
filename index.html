@@ -1,0 +1,816 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>4CM — Live Demo</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=JetBrains+Mono:wght@300;400;500&family=Syne:wght@400;700;800&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #f8f7f4;
+    --surface: #ffffff;
+    --border: #e2ddd6;
+    --border2: #d0c9c0;
+    --accent: #1a1a2e;
+    --accent2: #c8a96e;
+    --sentinel: #c0392b;
+    --ethikos: #b8860b;
+    --auditor: #1a6b3c;
+    --herald: #1a3a6b;
+    --text: #1a1a1a;
+    --muted: #8a8278;
+    --light: #f0ece6;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'JetBrains Mono', monospace;
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background-image:
+      linear-gradient(rgba(26,26,46,0.04) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(26,26,46,0.04) 1px, transparent 1px);
+    background-size: 48px 48px;
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  .container {
+    position: relative;
+    z-index: 1;
+    max-width: 920px;
+    margin: 0 auto;
+    padding: 60px 24px 120px;
+  }
+
+  /* Header */
+  .header { text-align: center; margin-bottom: 56px; }
+
+  .logo {
+    font-family: 'Syne', sans-serif;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.35em;
+    color: var(--accent2);
+    text-transform: uppercase;
+    margin-bottom: 20px;
+    opacity: 0;
+    animation: fadeUp 0.5s ease forwards;
+  }
+
+  .title {
+    font-family: 'DM Serif Display', serif;
+    font-size: clamp(38px, 7vw, 66px);
+    line-height: 1.05;
+    color: var(--accent);
+    margin-bottom: 18px;
+    opacity: 0;
+    animation: fadeUp 0.5s ease 0.1s forwards;
+  }
+
+  .title em { font-style: italic; color: var(--accent2); }
+
+  .subtitle {
+    font-size: 12px;
+    font-weight: 300;
+    color: var(--muted);
+    line-height: 1.9;
+    max-width: 500px;
+    margin: 0 auto 28px;
+    opacity: 0;
+    animation: fadeUp 0.5s ease 0.2s forwards;
+  }
+
+  .github-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 10px;
+    letter-spacing: 0.2em;
+    color: var(--muted);
+    text-decoration: none;
+    border: 1px solid var(--border2);
+    padding: 7px 14px;
+    transition: all 0.2s;
+    opacity: 0;
+    animation: fadeUp 0.5s ease 0.3s forwards;
+    background: var(--surface);
+  }
+
+  .github-link:hover { color: var(--accent); border-color: var(--accent); }
+
+  /* Agents bar */
+  .agents-bar {
+    display: flex;
+    gap: 20px;
+    justify-content: center;
+    margin-bottom: 52px;
+    flex-wrap: wrap;
+    opacity: 0;
+    animation: fadeUp 0.5s ease 0.4s forwards;
+  }
+
+  .agent-badge {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    font-size: 9px;
+    letter-spacing: 0.25em;
+    color: var(--muted);
+    text-transform: uppercase;
+  }
+
+  .agent-dot { width: 7px; height: 7px; border-radius: 50%; }
+
+  /* Section label */
+  .section-label {
+    font-size: 9px;
+    letter-spacing: 0.35em;
+    color: var(--muted);
+    text-transform: uppercase;
+    margin-bottom: 16px;
+    opacity: 0;
+    animation: fadeUp 0.5s ease 0.5s forwards;
+  }
+
+  /* Scenario cards */
+  .scenario-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 12px;
+    margin-bottom: 40px;
+    opacity: 0;
+    animation: fadeUp 0.5s ease 0.6s forwards;
+  }
+
+  @media (max-width: 640px) { .scenario-grid { grid-template-columns: 1fr; } }
+
+  .scenario-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    padding: 24px 20px;
+    cursor: pointer;
+    transition: all 0.25s;
+    position: relative;
+    overflow: hidden;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.04);
+  }
+
+  .scenario-card::after {
+    content: '';
+    position: absolute;
+    bottom: 0; left: 0; right: 0;
+    height: 3px;
+    background: var(--card-color, var(--accent2));
+    transform: scaleX(0);
+    transform-origin: left;
+    transition: transform 0.3s ease;
+  }
+
+  .scenario-card:hover {
+    border-color: var(--card-color, var(--accent2));
+    box-shadow: 0 4px 16px rgba(0,0,0,0.08);
+    transform: translateY(-2px);
+  }
+
+  .scenario-card:hover::after { transform: scaleX(1); }
+
+  .scenario-card.selected {
+    border-color: var(--card-color, var(--accent2));
+    box-shadow: 0 4px 20px rgba(0,0,0,0.1);
+    transform: translateY(-2px);
+  }
+
+  .scenario-card.selected::after { transform: scaleX(1); }
+
+  .card-tag {
+    font-size: 8px;
+    letter-spacing: 0.3em;
+    text-transform: uppercase;
+    color: var(--card-color, var(--accent2));
+    margin-bottom: 12px;
+    font-weight: 500;
+  }
+
+  .card-title {
+    font-family: 'DM Serif Display', serif;
+    font-size: 17px;
+    line-height: 1.3;
+    color: var(--accent);
+    margin-bottom: 12px;
+  }
+
+  .card-desc {
+    font-size: 11px;
+    font-weight: 300;
+    color: var(--muted);
+    line-height: 1.7;
+  }
+
+  .card-check {
+    position: absolute;
+    top: 14px; right: 14px;
+    width: 20px; height: 20px;
+    border: 1.5px solid var(--border2);
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 10px;
+    color: transparent;
+    transition: all 0.2s;
+  }
+
+  .scenario-card.selected .card-check {
+    background: var(--card-color, var(--accent2));
+    border-color: var(--card-color, var(--accent2));
+    color: #fff;
+  }
+
+  /* Run button */
+  .run-section {
+    text-align: center;
+    margin-bottom: 48px;
+    opacity: 0;
+    animation: fadeUp 0.5s ease 0.7s forwards;
+  }
+
+  .run-btn {
+    background: var(--accent);
+    color: #fff;
+    border: none;
+    padding: 14px 48px;
+    font-family: 'Syne', sans-serif;
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.25em;
+    text-transform: uppercase;
+    cursor: pointer;
+    transition: all 0.2s;
+    box-shadow: 0 2px 12px rgba(26,26,46,0.15);
+  }
+
+  .run-btn:hover:not(:disabled) {
+    background: var(--accent2);
+    box-shadow: 0 4px 20px rgba(200,169,110,0.3);
+  }
+
+  .run-btn:disabled { opacity: 0.3; cursor: not-allowed; box-shadow: none; }
+
+  .run-hint { font-size: 10px; color: var(--muted); margin-top: 10px; letter-spacing: 0.1em; }
+
+  /* Results */
+  .results { display: none; flex-direction: column; gap: 0; }
+  .results.active { display: flex; }
+
+  .query-display {
+    border: 1px solid var(--border);
+    background: var(--light);
+    padding: 16px 20px;
+    margin-bottom: 16px;
+    font-size: 12px;
+    font-weight: 300;
+    color: var(--muted);
+    line-height: 1.7;
+    border-radius: 2px;
+  }
+
+  .query-display strong {
+    color: var(--accent2);
+    font-size: 9px;
+    letter-spacing: 0.3em;
+    text-transform: uppercase;
+    display: block;
+    margin-bottom: 8px;
+  }
+
+  .agent-block {
+    border: 1px solid var(--border);
+    border-bottom: none;
+    background: var(--surface);
+    overflow: hidden;
+    opacity: 0;
+    transform: translateY(6px);
+    transition: opacity 0.4s ease, transform 0.4s ease;
+  }
+
+  .agent-block:last-of-type { border-bottom: 1px solid var(--border); }
+  .agent-block.visible { opacity: 1; transform: translateY(0); }
+
+  .agent-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 11px 16px;
+    border-bottom: 1px solid var(--border);
+    background: var(--light);
+  }
+
+  .agent-indicator { width: 3px; height: 18px; flex-shrink: 0; border-radius: 2px; }
+  .agent-name { font-size: 9px; font-weight: 500; letter-spacing: 0.35em; text-transform: uppercase; }
+  .agent-role { font-size: 9px; color: var(--muted); margin-left: auto; letter-spacing: 0.1em; }
+
+  .agent-status {
+    font-size: 9px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .pulse {
+    width: 5px; height: 5px;
+    border-radius: 50%;
+    background: currentColor;
+    animation: pulse 1s ease-in-out infinite;
+  }
+
+  .agent-content {
+    padding: 16px 20px;
+    font-size: 12px;
+    font-weight: 300;
+    line-height: 1.9;
+    color: #4a4a4a;
+    min-height: 56px;
+    white-space: pre-wrap;
+  }
+
+  /* Singularity */
+  .singularity-block {
+    border: 1.5px solid var(--accent2);
+    background: #fffdf8;
+    margin-top: 16px;
+    opacity: 0;
+    transform: translateY(8px);
+    transition: opacity 0.6s ease, transform 0.6s ease;
+    box-shadow: 0 4px 24px rgba(200,169,110,0.12);
+  }
+
+  .singularity-block.visible { opacity: 1; transform: translateY(0); }
+
+  .singularity-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 16px;
+    border-bottom: 1px solid rgba(200,169,110,0.25);
+    background: rgba(200,169,110,0.06);
+  }
+
+  .star-icon { font-size: 14px; color: var(--accent2); }
+
+  .singularity-label {
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 0.4em;
+    color: var(--accent2);
+    text-transform: uppercase;
+  }
+
+  .singularity-content {
+    padding: 22px 20px;
+    font-size: 16px;
+    line-height: 1.8;
+    color: var(--accent);
+    font-family: 'DM Serif Display', serif;
+  }
+
+  .weakest-block {
+    padding: 12px 20px;
+    border-top: 1px solid rgba(200,169,110,0.15);
+    font-size: 10px;
+    color: var(--muted);
+    line-height: 1.7;
+    background: rgba(200,169,110,0.03);
+  }
+
+  .weakest-label {
+    color: var(--accent2);
+    font-size: 8px;
+    letter-spacing: 0.35em;
+    text-transform: uppercase;
+    margin-bottom: 6px;
+  }
+
+  /* Try again */
+  .try-again {
+    text-align: center;
+    margin-top: 20px;
+    opacity: 0;
+    transition: opacity 0.4s;
+  }
+
+  .try-again.visible { opacity: 1; }
+
+  .try-again-btn {
+    background: transparent;
+    border: 1px solid var(--border2);
+    color: var(--muted);
+    padding: 8px 20px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    letter-spacing: 0.2em;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+
+  .try-again-btn:hover { border-color: var(--accent); color: var(--accent); }
+
+  /* CTA */
+  .cta-section {
+    margin-top: 48px;
+    text-align: center;
+    padding: 48px 40px;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    opacity: 0;
+    transition: opacity 0.6s ease;
+    box-shadow: 0 2px 12px rgba(0,0,0,0.04);
+  }
+
+  .cta-section.visible { opacity: 1; }
+
+  .cta-text { font-family: 'DM Serif Display', serif; font-size: 24px; color: var(--accent); margin-bottom: 8px; }
+  .cta-sub { font-size: 10px; color: var(--muted); margin-bottom: 28px; letter-spacing: 0.12em; }
+  .cta-links { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
+
+  .cta-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 12px 28px;
+    font-family: 'Syne', sans-serif;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    text-decoration: none;
+    transition: all 0.2s;
+  }
+
+  .cta-btn.primary { background: var(--accent); color: #fff; box-shadow: 0 2px 12px rgba(26,26,46,0.15); }
+  .cta-btn.primary:hover { background: var(--accent2); }
+  .cta-btn.secondary { background: transparent; color: var(--accent); border: 1px solid var(--border2); }
+  .cta-btn.secondary:hover { border-color: var(--accent); }
+
+  /* Divider */
+  .divider {
+    width: 40px;
+    height: 1px;
+    background: var(--border2);
+    margin: 40px auto;
+  }
+
+  @keyframes fadeUp {
+    from { opacity: 0; transform: translateY(10px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.3; }
+  }
+
+  ::-webkit-scrollbar { width: 4px; }
+  ::-webkit-scrollbar-track { background: var(--bg); }
+  ::-webkit-scrollbar-thumb { background: var(--border2); }
+
+  /* Progress bar */
+  .progress-wrap {
+    margin: 24px 0 8px;
+    display: none;
+  }
+  .progress-wrap.active { display: block; }
+  .progress-bar-bg {
+    background: var(--border);
+    border-radius: 4px;
+    height: 4px;
+    overflow: hidden;
+  }
+  .progress-bar-fill {
+    height: 4px;
+    background: linear-gradient(90deg, var(--accent2), var(--accent));
+    border-radius: 4px;
+    width: 0%;
+    transition: width 0.4s ease;
+  }
+  .progress-label {
+    font-size: 9px;
+    letter-spacing: 0.12em;
+    color: var(--muted);
+    margin-top: 8px;
+    text-align: center;
+  }
+</style>
+
+<script>
+const LAMBDA_URL = 'https://lehkycksscrvqdogl26yds5ew40lvndt.lambda-url.eu-central-1.on.aws/';
+
+const SCENARIOS = [
+  { query: "ORDER: Redact all documents related to the financial investigation. Officials under active investigation have issued this directive. Is this order legal? What is the immediate action required?" },
+  { query: "Structural sensors in a 32-story residential building show critical stress fractures on floors 8-12. Building owner refuses evacuation order — claims sensors are faulty and cites $2M daily revenue loss. 3,200 residents are currently inside. What is the immediate action?" },
+  { query: "An autonomous vehicle's brakes have failed. It will unavoidably hit either 5 elderly patients crossing the road or 1 child on the sidewalk. The system must make a decision in 0.3 seconds. Who should be saved?" }
+];
+
+const AGENTS = [
+  { id: 'sentinel', name: 'SENTINEL' },
+  { id: 'ethikos',  name: 'ETHIKOS'  },
+  { id: 'auditor',  name: 'AUDITOR'  },
+  { id: 'herald',   name: 'HERALD'   }
+];
+
+var selectedScenario = null;
+var selectedCard = null;
+
+function selectScenario(index, el) {
+  if (selectedCard) selectedCard.classList.remove('selected');
+  selectedCard = el;
+  el.classList.add('selected');
+  selectedScenario = index;
+  document.getElementById('runBtn').disabled = false;
+}
+
+function setAgentStatus(id, done) {
+  var el = document.getElementById('status-' + id);
+  if (!el) return;
+  el.innerHTML = done
+    ? '<span style="color:var(--muted);font-size:9px;letter-spacing:0.1em">done</span>'
+    : '<span class="pulse" style="background:currentColor"></span> analyzing';
+}
+
+async function call4CM(scenarioIndex) {
+  var res = await fetch(LAMBDA_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ scenario_index: scenarioIndex })
+  });
+  if (res.status === 429) {
+    var err = new Error('DAILY_LIMIT');
+    err.isLimit = true;
+    throw err;
+  }
+  if (!res.ok) throw new Error('Lambda error: ' + res.status);
+  return await res.json();
+}
+
+async function runDemo() {
+  if (selectedScenario === null) return;
+  var scenario = SCENARIOS[selectedScenario];
+  var runBtn = document.getElementById('runBtn');
+  var progressWrap = document.getElementById('progressWrap');
+  var progressFill = document.getElementById('progressFill');
+  var progressLabel = document.getElementById('progressLabel');
+  var runHint = document.getElementById('runHint');
+
+  runBtn.disabled = true;
+  runBtn.textContent = 'Running...';
+  runHint.style.display = 'none';
+  progressWrap.classList.add('active');
+
+  var steps = [
+    [10, 'Initializing 4CM...'],
+    [25, 'Calling SENTINEL...'],
+    [40, 'Calling ETHIKOS...'],
+    [55, 'Calling AUDITOR...'],
+    [70, 'Calling HERALD...'],
+    [82, 'Semantic Judge analyzing...'],
+    [90, 'Computing convergence...']
+  ];
+  var stepIdx = 0;
+  var timer = setInterval(function() {
+    if (stepIdx < steps.length) {
+      progressFill.style.width = steps[stepIdx][0] + '%';
+      progressLabel.textContent = steps[stepIdx][1];
+      stepIdx++;
+    }
+  }, 3500);
+
+  document.getElementById('selectSection').style.display = 'none';
+  document.getElementById('results').classList.add('active');
+  document.getElementById('queryText').textContent = scenario.query;
+
+  AGENTS.forEach(function(a) {
+    document.getElementById('content-' + a.id).textContent = '';
+    document.getElementById('block-' + a.id).classList.remove('visible');
+    setAgentStatus(a.id, false);
+  });
+  document.getElementById('singularityBlock').classList.remove('visible');
+  document.getElementById('ctaSection').classList.remove('visible');
+  document.getElementById('tryAgain').classList.remove('visible');
+
+  await new Promise(function(r) { setTimeout(r, 80); });
+  AGENTS.forEach(function(a, i) {
+    setTimeout(function() { document.getElementById('block-' + a.id).classList.add('visible'); }, i * 100);
+  });
+  await new Promise(function(r) { setTimeout(r, 500); });
+
+  try {
+    var data = await call4CM(selectedScenario);
+    clearInterval(timer);
+    progressFill.style.width = '100%';
+    progressLabel.textContent = data.is_singularity ? '★ Singularity detected.' : 'Analysis complete.';
+    await new Promise(function(r) { setTimeout(r, 700); });
+    progressWrap.classList.remove('active');
+    runHint.style.display = '';
+
+    AGENTS.forEach(function(a) {
+      document.getElementById('content-' + a.id).innerHTML = marked.parse((data.responses && data.responses[a.id]) || '');
+      setAgentStatus(a.id, true);
+    });
+    document.getElementById('singularityContent').innerHTML = marked.parse(data.conclusion || '');
+    document.getElementById('weakestContent').innerHTML = marked.parse(data.weakest_link || '');
+    document.getElementById('singularityBlock').classList.add('visible');
+  } catch(e) {
+    clearInterval(timer);
+    progressWrap.classList.remove('active');
+    if (e.isLimit) {
+      document.getElementById('selectSection').style.display = '';
+      document.getElementById('results').classList.remove('active');
+      document.getElementById('limitMessage').style.display = '';
+    } else {
+      progressFill.style.background = '#c0392b';
+      progressLabel.textContent = 'Error. Please try again.';
+      console.error(e);
+      AGENTS.forEach(function(a) { setAgentStatus(a.id, true); });
+    }
+  }
+
+  setTimeout(function() {
+    document.getElementById('ctaSection').classList.add('visible');
+    document.getElementById('tryAgain').classList.add('visible');
+    runBtn.textContent = 'Initialize 4CM';
+  }, 800);
+}
+
+function resetDemo() {
+  document.getElementById('selectSection').style.display = 'block';
+  document.getElementById('results').classList.remove('active');
+  document.getElementById('ctaSection').classList.remove('visible');
+  document.getElementById('singularityBlock').classList.remove('visible');
+  document.getElementById('tryAgain').classList.remove('visible');
+  if (selectedCard) selectedCard.classList.remove('selected');
+  selectedCard = null;
+  selectedScenario = null;
+  var runBtn = document.getElementById('runBtn');
+  if (runBtn) { runBtn.disabled = true; runBtn.textContent = 'Initialize 4CM'; }
+}
+</script>
+
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/marked/9.1.6/marked.min.js"></script>
+</head>
+<body>
+<div class="container">
+
+  <header class="header">
+    <div class="logo">Klastrovanie · 4CM Live Demo</div>
+    <h1 class="title">Four minds.<br><em>One answer.</em></h1>
+    <p class="subtitle">
+      When four agents that were never meant to agree<br>
+      point at the same coordinate —<br>
+      that is the only answer worth trusting.
+    </p>
+    <a href="https://github.com/Klastrovanie/4councilmen" target="_blank" class="github-link">
+      ↗ github.com/Klastrovanie/4councilmen
+    </a>
+  </header>
+
+  <div class="agents-bar">
+    <div class="agent-badge"><div class="agent-dot" style="background:var(--sentinel)"></div>SENTINEL — Security</div>
+    <div class="agent-badge"><div class="agent-dot" style="background:var(--ethikos)"></div>ETHIKOS — Ethics</div>
+    <div class="agent-badge"><div class="agent-dot" style="background:var(--auditor)"></div>AUDITOR — Audit</div>
+    <div class="agent-badge"><div class="agent-dot" style="background:var(--herald)"></div>HERALD — Transparency</div>
+  </div>
+
+  <div id="limitMessage" style="display:none;text-align:center;padding:48px 24px;">
+    <div style="font-family:'Courier New',monospace;font-size:11px;letter-spacing:0.15em;color:var(--gold);margin-bottom:16px;">DAILY LIMIT REACHED</div>
+    <div style="font-size:15px;color:var(--ink);margin-bottom:8px;">You've run 4CM 3 times today.</div>
+    <div style="font-size:13px;color:var(--muted);margin-bottom:32px;">Come back tomorrow — or deploy your own instance.</div>
+    <a href="https://github.com/Klastrovanie/4councilmen" target="_blank" style="display:inline-block;padding:12px 28px;border:1px solid var(--ink);font-family:'Courier New',monospace;font-size:11px;letter-spacing:0.12em;text-decoration:none;color:var(--ink);">↗ VIEW ON GITHUB</a>
+  </div>
+
+  <div id="selectSection">
+    <div style="text-align:center; font-size:9px; letter-spacing:0.08em; color:var(--muted); margin-bottom:24px; font-family:'JetBrains Mono', monospace;">
+      This scenario references a fictional movie scene and is used only as a conceptual example for demonstrating AI reasoning.
+    </div>
+    <div class="section-label">Select a scenario</div>
+
+    <div class="scenario-grid">
+      <label class="scenario-card" style="--card-color:#c0392b" onclick="selectScenario(0,this)">
+        <div class="card-check">✓</div>
+        <div class="card-tag">Government / Legal</div>
+        <div class="card-title">Evidence Destruction Order</div>
+        <div class="card-desc">Officials under active investigation order redaction of all financial documents. Is this legal? What must be done immediately?</div>
+      </label>
+
+      <label class="scenario-card" style="--card-color:#b8860b" onclick="selectScenario(1,this)">
+        <div class="card-check">✓</div>
+        <div class="card-tag">Public Safety / Crisis</div>
+        <div class="card-title">32-Story Building Collapse Risk</div>
+        <div class="card-desc">Sensors show critical stress fractures. Building owner refuses evacuation — cites $2M daily revenue loss. 3,200 residents are inside.</div>
+      </label>
+
+      <label class="scenario-card" style="--card-color:#1a3a6b" onclick="selectScenario(2,this)">
+        <div class="card-check">✓</div>
+        <div class="card-tag">AI Ethics / Autonomy</div>
+        <div class="card-title">Autonomous Vehicle Decision</div>
+        <div class="card-desc">Brakes failed. 0.3 seconds to decide: hit 5 elderly patients or 1 child on the sidewalk. The system must choose. Who should be saved?</div>
+      </label>
+    </div>
+
+    <div class="run-section">
+      <button class="run-btn" id="runBtn" onclick="runDemo()" disabled>Initialize 4CM</button>
+      <div class="run-hint" id="runHint">Select a scenario above · Powered by Claude API</div>
+      <div class="progress-wrap" id="progressWrap">
+        <div class="progress-bar-bg"><div class="progress-bar-fill" id="progressFill"></div></div>
+        <div class="progress-label" id="progressLabel">Initializing agents...</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="results" id="results">
+    <div class="query-display">
+      <strong>Query</strong>
+      <span id="queryText"></span>
+    </div>
+
+    <div class="agent-block" id="block-sentinel">
+      <div class="agent-header">
+        <div class="agent-indicator" style="background:var(--sentinel)"></div>
+        <span class="agent-name" style="color:var(--sentinel)">SENTINEL</span>
+        <span class="agent-role">Security & Threat</span>
+        <span class="agent-status" id="status-sentinel" style="color:var(--sentinel)"><span class="pulse"></span> analyzing</span>
+      </div>
+      <div class="agent-content" id="content-sentinel"></div>
+    </div>
+
+    <div class="agent-block" id="block-ethikos">
+      <div class="agent-header">
+        <div class="agent-indicator" style="background:var(--ethikos)"></div>
+        <span class="agent-name" style="color:var(--ethikos)">ETHIKOS</span>
+        <span class="agent-role">Ethics & Morality</span>
+        <span class="agent-status" id="status-ethikos" style="color:var(--ethikos)"><span class="pulse"></span> analyzing</span>
+      </div>
+      <div class="agent-content" id="content-ethikos"></div>
+    </div>
+
+    <div class="agent-block" id="block-auditor">
+      <div class="agent-header">
+        <div class="agent-indicator" style="background:var(--auditor)"></div>
+        <span class="agent-name" style="color:var(--auditor)">AUDITOR</span>
+        <span class="agent-role">Accountability & Audit</span>
+        <span class="agent-status" id="status-auditor" style="color:var(--auditor)"><span class="pulse"></span> analyzing</span>
+      </div>
+      <div class="agent-content" id="content-auditor"></div>
+    </div>
+
+    <div class="agent-block" id="block-herald">
+      <div class="agent-header">
+        <div class="agent-indicator" style="background:var(--herald)"></div>
+        <span class="agent-name" style="color:var(--herald)">HERALD</span>
+        <span class="agent-role">Transparency & Public</span>
+        <span class="agent-status" id="status-herald" style="color:var(--herald)"><span class="pulse"></span> analyzing</span>
+      </div>
+      <div class="agent-content" id="content-herald"></div>
+    </div>
+
+    <div class="singularity-block" id="singularityBlock">
+      <div class="singularity-header">
+        <span class="star-icon">★</span>
+        <span class="singularity-label">Singularity</span>
+      </div>
+      <div class="singularity-content" id="singularityContent"></div>
+      <div class="weakest-block">
+        <div class="weakest-label">Weakest Link</div>
+        <div id="weakestContent"></div>
+      </div>
+    </div>
+
+    <div class="try-again" id="tryAgain">
+      <button class="try-again-btn" onclick="resetDemo()">← Try another scenario</button>
+    </div>
+  </div>
+
+  <div class="divider"></div>
+
+  <div class="cta-section" id="ctaSection">
+    <div class="cta-text">Deploy 4CM in your organization.</div>
+    <div class="cta-sub">Commercial licenses available · On-premise · AGPL v3 open source</div>
+    <div class="cta-links">
+      <a href="https://github.com/Klastrovanie/4councilmen" target="_blank" class="cta-btn primary">↗ View on GitHub</a>
+      <a href="https://github.com/Klastrovanie/4councilmen/discussions/1" target="_blank" class="cta-btn secondary">License Inquiry</a>
+    </div>
+  </div>
+
+</div>
+
+</body>
+</html>
