@@ -143,6 +143,9 @@ bash run.sh
 ```
 For research use, please replace default Claude API integration with 4 different API providers.
 
+## Live Demo 
+https://klastrovanie.github.io/4councilmen/   
+
 ## License
 
 AGPL v3 — free for research and non-commercial use.  
