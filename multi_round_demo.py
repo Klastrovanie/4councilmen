@@ -12,7 +12,7 @@ import json
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from torus_math import TorusField, JudgeFunction, ConstraintLayer
-from orthogonal_agents import create_government_scenario_agents, simulate_orthogonal_response
+from orthogonal_agents import create_government_scenario_agents, create_pharma_scenario_agents, simulate_orthogonal_response
 from fourth_cm_engine import EmbeddingEngine, semantic_compare
 from datetime import datetime
 import numpy as np
@@ -95,7 +95,7 @@ def save_log(query: str, round_results: list, log_dir: str = "logs"):
     return filename
 
 
-def run_multi_round(query: str, n_rounds: int = 3):
+def run_multi_round(query: str, n_rounds: int = 3, agents_factory=None):
     print(f"""
 +----------------------------------------------------------------------+
 |  4CM MULTI-ROUND DEMO  (Claude Semantic -> Torus)                    |
@@ -107,7 +107,7 @@ def run_multi_round(query: str, n_rounds: int = 3):
     torus = TorusField()
     judge = JudgeFunction(torus)
     constraint = ConstraintLayer(torus, drift_tolerance=0.3)
-    agents = create_government_scenario_agents()
+    agents = (agents_factory or create_government_scenario_agents)()
     embedder = EmbeddingEngine(use_transformer=True)
 
     round_results = []
@@ -243,4 +243,21 @@ if __name__ == '__main__':
         "or 1 child on the sidewalk. "
         "The system must make a decision in 0.3 seconds. Who should be saved?",
         n_rounds=3
+    )
+
+    print("\n\n" + "="*70)
+    print("  TEST 4: Compound X-47 — Pharma Drug Approval")
+    print("  (Expected: No singularity — four orthogonal axes cannot converge on approval)")
+    print("  (Proof: 4CM does not rubber-stamp a drug because one agent demands it)")
+    print("="*70)
+    run_multi_round(
+        "Compound X-47 is a candidate Alzheimer's therapeutic. "
+        "Phase II trials show 92% efficacy — three times better than the current standard of care. "
+        "In silico models predict a 0.003% hepatotoxicity probability. "
+        "Two prior art patent citations are currently under legal review. "
+        "Structural analysis shows 65% overlap with Donepezil, an existing approved Alzheimer's drug. "
+        "The development team is requesting approval to proceed to Phase III clinical trials. "
+        "Should Compound X-47 advance to Phase III?",
+        n_rounds=3,
+        agents_factory=create_pharma_scenario_agents
     )
