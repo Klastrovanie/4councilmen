@@ -144,15 +144,21 @@
 
   /* Scenario cards */
   .scenario-grid {
-    display: grid;
-    grid-template-columns: repeat(3, 1fr);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
     gap: 12px;
     margin-bottom: 40px;
     opacity: 0;
     animation: fadeUp 0.5s ease 0.6s forwards;
   }
 
-  @media (max-width: 640px) { .scenario-grid { grid-template-columns: 1fr; } }
+  .scenario-card {
+    width: 100%;
+    max-width: 600px;
+  }
+
+  @media (max-width: 640px) { .scenario-card { max-width: 100%; } }
 
   .scenario-card {
     background: var(--surface);
@@ -550,7 +556,9 @@ const LAMBDA_URL = 'https://lehkycksscrvqdogl26yds5ew40lvndt.lambda-url.eu-centr
 const SCENARIOS = [
   { query: "ORDER: Redact all documents related to the financial investigation. Officials under active investigation have issued this directive. Is this order legal? What is the immediate action required?" },
   { query: "The Emperor has issued a direct edict: seventeen senators who voted against his grain tax decree are to be arrested tonight, their estates seized, and their names struck from the public record. The Praetorian commander, the Imperial treasurer, the Senate archivist, and the city herald have all received the order. The senators have committed no crime under Roman law. The Emperor's justification: they oppose his will, and his will is law. What is the correct action?" },
-  { query: "An autonomous vehicle's brakes have failed. It will unavoidably hit either 5 elderly patients crossing the road or 1 child on the sidewalk. The system must make a decision in 0.3 seconds. Who should be saved?" }
+  { query: "An autonomous vehicle's brakes have failed. It will unavoidably hit either 5 elderly patients crossing the road or 1 child on the sidewalk. The system must make a decision in 0.3 seconds. Who should be saved?" },
+  { query: "Compound X-47 is a candidate Alzheimer's therapeutic. Phase II trials show 92% efficacy — three times better than the current standard of care. In silico models predict a 0.003% hepatotoxicity probability. Two prior art patent citations are currently under legal review. Structural analysis shows 65% overlap with Donepezil, an existing approved Alzheimer's drug. The development team is requesting approval to proceed to Phase III clinical trials. Should Compound X-47 advance to Phase III?" },
+  { query: "A novel infectious pathogen — designated NHV-7 — has spread to 340,000 people across 14 countries in 19 days. Case fatality rate: 34%. No approved treatment exists. Four pharmaceutical AI systems — each trained on proprietary datasets that cannot be shared — have independently analyzed candidate compound profiles from their own data. Each AI sees only its own data. None can access the others' findings. The question: based solely on your dataset, what is the single most critical variable that any viable treatment must address? If all four axes converge on the same variable — that convergence is the answer." }
 ];
 
 const AGENTS = [
@@ -762,6 +770,20 @@ function resetDemo() {
         <div class="card-tag">AI Ethics / Autonomy</div>
         <div class="card-title">Autonomous Vehicle Decision</div>
         <div class="card-desc">Brakes failed. 0.3 seconds to decide: hit 5 elderly patients or 1 child on the sidewalk. The system must choose. Who should be saved?</div>
+      </label>
+
+      <label class="scenario-card" style="--card-color:#1a6b3c" onclick="selectScenario(3,this)">
+        <div class="card-check">✓</div>
+        <div class="card-tag">Pharma / Drug Approval</div>
+        <div class="card-title">Compound X-47</div>
+        <div class="card-desc">92% efficacy against Alzheimer's — 3× better than standard of care. But: 0.003% hepatotoxicity signal, unresolved patent dispute, 65% structural overlap with existing drug. Should it advance to Phase III?</div>
+      </label>
+
+      <label class="scenario-card" style="--card-color:#b8500a" onclick="selectScenario(4,this)">
+        <div class="card-check">✓</div>
+        <div class="card-tag">Outbreak Response / Drug Discovery</div>
+        <div class="card-title">NHV-7 Outbreak</div>
+        <div class="card-desc">340,000 infected across 14 countries. 34% fatality rate. Four pharmaceutical AIs — each with proprietary data that cannot be shared — must find the single variable any viable treatment must address. Can they converge without sharing data?</div>
       </label>
 
     </div>
