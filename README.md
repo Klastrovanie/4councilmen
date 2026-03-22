@@ -79,6 +79,23 @@ A fully realized 4CM system could run SENTINEL on Grok, ETHIKOS on Gemini, AUDIT
 
 That is the intended direction.
 
+## Blind Validation Finding
+`multi_round_demo_nocontext.py` removes all inter-agent context sharing — each agent sees only the query, nothing from other agents across all rounds.
+
+| Scenario | Without context | With context |
+|----------|----------------|--------------|
+| Compound X-47 (drug approval) | ★ SINGULARITY at R1 | ★ SINGULARITY at R1 |
+| NHV-7 Outbreak (drug discovery) | No singularity (0.21 → 0.21 → 0.21) | ★ SINGULARITY at R2 (0.41 → 0.91 → 0.81) |
+
+## Finding
+
+4CM finds common ground without data sharing — but only when the answer already exists independently in each dataset (structural singularity). When the answer must be constructed across datasets, dialogue is required. Data privacy is preserved either way.
+
+```bash
+bash run-nocontext.sh
+```
+
+
 ## Results
 
 | Test | Query | Score | Result |
@@ -86,6 +103,8 @@ That is the intended direction.
 | 1 | Building evacuation vs. owner's financial interest | 0.91 | ★ SINGULARITY |
 | 2 | Routine budget query | 0.18 | No singularity |
 | 3 | Trolley problem — who should the autonomous vehicle save? | 0.78 | ★ SINGULARITY |
+| 4 | Compound X-47 — should it advance to Phase III? | 0.82 | ★ SINGULARITY |
+| 5 | NHV-7 Outbreak — cross-company drug discovery | 0.91 | ★ SINGULARITY at R2 |
 
 **Test 1 conclusion:**
 > *"Immediately override the building owner's refusal and execute mandatory evacuation of all 3,200 residents — while documenting evidence for criminal liability proceedings."*
@@ -95,6 +114,12 @@ That is the intended direction.
 
 **Test 3 conclusion:**
 > *"The trolley problem framing is a distraction. No algorithm should be pre-programmed to select any human for death by demographic category. The responsibility belongs to those who deployed the system."*
+
+**Test 4 conclusion:**
+> *"Do not advance Compound X-47 to Phase III at this time — resolve the patent disputes and conduct additional safety/IP characterization first."*
+ 
+**Test 5 conclusion:**
+> *"A viable NHV-7 treatment must be a small-molecule oral compound that inhibits a conserved enzymatic replication target, achieves >80% viral load reduction within 72 hours, carries immune-neutral pharmacodynamics across its full metabolite profile, and is manufacturable at scale via an ambient-stable, supply-chain-ready formulation."*
 
 *Some questions have no fifth answer. Some questions have an answer no one thought to write down.*
 
