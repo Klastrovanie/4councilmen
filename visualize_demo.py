@@ -90,7 +90,9 @@ def create_full_visualization():
     # Real v3 results
     queries = ['Building\nEvacuation', 'Routine\nBudget Query', 'Trolley\nProblem']
     semantic_scores = [0.91, 0.18, 0.78]
-    singularity_threshold = 0.75  # semantic score threshold for singularity
+    singularity_threshold = 0.5  
+    # semantic score threshold for singularity
+    # Bascially the ring will be formed at 0.5
 
     is_sing = [s >= singularity_threshold for s in semantic_scores]
     bar_colors = [singularity_color if s else '#2a2a2a' for s in is_sing]

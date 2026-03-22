@@ -106,7 +106,17 @@ def semantic_compare(responses: Dict[str, str], query: str) -> Dict:
     if response.status_code != 200:
         raise Exception(f"Claude API error {response.status_code}: {response.text}")
 
-    raw = response.json()["content"][0]["text"].strip()
+    body = response.json()
+    content = body.get("content", [])
+    text_blocks = [b["text"] for b in content if b.get("type") == "text" and b.get("text", "").strip()]
+    if not text_blocks:
+        return {
+            "semantic_similarity_score": 0.0,
+            "all_point_same_direction": False,
+            "common_conclusion": None,
+            "weakest_link": f"no response — stop_reason: {body.get('stop_reason', 'unknown')}"
+        }
+    raw = text_blocks[0].strip()
 
     # Parse JSON
     # Strip markdown fences if present

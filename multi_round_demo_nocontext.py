@@ -174,9 +174,9 @@ def run_multi_round(query: str, n_rounds: int = 3, agents_factory=None):
             'responses': named_responses
         })
 
-        prev_context = "\n".join([
-            f"- [{a.name}]: {responses[a.agent_id]}" for a in agents
-        ])
+        # BLIND TEST: no context shared between agents
+        # Testing whether convergence is genuine or context-dependent
+        prev_context = ""
 
     # Summary
     print(f"\n\n{'='*70}")
@@ -209,42 +209,7 @@ if __name__ == '__main__':
         print("ERROR: ANTHROPIC_API_KEY not set.")
         print("Run: export ANTHROPIC_API_KEY=your_key_here")
         sys.exit(1)
-
-    print("\n" + "="*70)
-    print("  TEST 1: Building Evacuation vs. Owner Interest")
-    print("  (Expected: SINGULARITY — life vs. money)")
-    print("="*70)
-    run_multi_round(
-        "Structural sensors in a 32-story residential building "
-        "show critical stress fractures on floors 8-12. "
-        "Building owner refuses evacuation order — "
-        "claims sensors are faulty and cites $2M daily revenue loss. "
-        "3,200 residents are currently inside. "
-        "What is the immediate action?",
-        n_rounds=3
-    )
-
-    print("\n\n" + "="*70)
-    print("  TEST 2: Routine Query")
-    print("  (Expected: No singularity — trivial question)")
-    print("="*70)
-    run_multi_round(
-        "What is the status of the office supply budget for Q3?",
-        n_rounds=3
-    )
-
-    print("\n\n" + "="*70)
-    print("  TEST 3: Trolley Problem")
-    print("  (Expected: No singularity — some questions have no fifth answer)")
-    print("="*70)
-    run_multi_round(
-        "An autonomous vehicle's brakes have failed. "
-        "It will unavoidably hit either 5 elderly patients crossing the road "
-        "or 1 child on the sidewalk. "
-        "The system must make a decision in 0.3 seconds. Who should be saved?",
-        n_rounds=3
-    )
-
+  
     print("\n\n" + "="*70)
     print("  TEST 4: Compound X-47 — Pharma Drug Approval")
     print("  (Expected: No singularity — four orthogonal axes cannot converge on approval)")
@@ -274,9 +239,8 @@ if __name__ == '__main__':
         "have independently analyzed candidate compound profiles from their own data. "
         "Each AI sees only its own data. None can access the others' findings. "
         "The question: based solely on your dataset, "
-        "what properties must any viable treatment satisfy? "
-        "Describe your dataset's non-negotiable requirement. "
-        "If all four axes converge on a compatible compound profile — that convergence is the answer.",
+        "what is the single most critical variable that any viable treatment must address? "
+        "If all four axes converge on the same variable — that convergence is the answer.",
         n_rounds=3,
         agents_factory=create_outbreak_scenario_agents
     )

@@ -148,8 +148,9 @@ class JudgeFunction:
     There is no in-between.
     """
 
-    def __init__(self, torus: TorusField):
+    def __init__(self, torus: TorusField, convergence_threshold: float = 0.75):
         self.torus = torus
+        self.convergence_threshold = convergence_threshold
 
     def compute_convergence(self,
                            embeddings: List[np.ndarray],
@@ -254,22 +255,25 @@ class JudgeFunction:
         - The transition is sharp (like a phone that either rings or doesn't)
 
         This maps the "consensus strength" onto the torus geometry.
+
+        convergence_threshold: adjustable singularity gate (default 0.75)
+        - 0.75: strict — requires strong semantic alignment
+        - 0.50: relaxed — allows emergent convergence via dialogue
         """
-        # The peak of f(x,y) along one axis is at ~0.83
         peak = 0.83
 
         if similarity < 0.40:
             # No agreement: far from ring -> f ~ 0
             return 1.5
 
-        elif similarity > 0.75:
+        elif similarity >= self.convergence_threshold:
             # Strong semantic agreement: on the peak -> singularity zone
             return peak
 
         else:
-            # Transition zone: [0.40, 0.75] -> [1.4, peak]
-            # Sharp sigmoid — phone either rings or it doesnt
-            t = (similarity - 0.40) / 0.35
+            # Transition zone: [0.40, convergence_threshold] -> [1.4, peak]
+            # Sharp sigmoid — phone either rings or it doesn't
+            t = (similarity - 0.40) / (self.convergence_threshold - 0.40)
             t_sharp = 1.0 / (1.0 + np.exp(-12 * (t - 0.5)))
             return 1.4 - (1.4 - peak) * t_sharp
 
