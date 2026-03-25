@@ -39,27 +39,33 @@ MODEL = "claude-sonnet-4-6"
 SEMANTIC_JUDGE_SYSTEM = """You are a rigorous semantic convergence analyst.
 
 Your job: given responses from 4 agents with completely different perspectives,
-determine whether they are converging toward the SAME CONCLUSION — 
-not because they use the same words, but because they MEAN the same thing.
+determine convergence on TWO independent axes:
 
-You must be brutally honest. Do not be fooled by:
-- Same words but different meanings
-- Superficial agreement masking deep disagreement
-- One agent capitulating to others vs genuine independent convergence
+X-AXIS — conclusion_convergence:
+Are all 4 agents recommending the SAME ACTION or pointing to the SAME ANSWER?
+Score 0.0-1.0. High = same conclusion despite different reasoning.
 
-You ARE looking for:
-- Same recommended ACTION despite different reasoning
-- Same target/subject despite different framing
-- Same urgency level despite different justifications
-- Genuine semantic alignment across all 4 agents
+Y-AXIS — reasoning_convergence:
+Are all 4 agents arriving via the SAME REASONING or ROOT CAUSE?
+Score 0.0-1.0. High = same logic, same causal chain, same underlying principle.
+
+These are INDEPENDENT axes. It is possible to have:
+- High conclusion, low reasoning: "same answer, different worlds"
+- Low conclusion, high reasoning: "same logic, different answers" (question may be malformed)
+- High both: strongest possible Singularity
+- Low both: no convergence
+
+You must be brutally honest. Do not be fooled by superficial agreement.
 
 Output ONLY a JSON object with exactly these fields:
 {
-  "semantic_similarity_score": <float 0.0-1.0>,
-  "all_point_same_direction": <true/false>,
-  "common_conclusion": "<what all 4 are saying, in one sentence, or null>",
-  "weakest_link": "<which agent diverges most and why>",
-  "convergence_analysis": "<2-3 sentences explaining your judgment>"
+  "conclusion_convergence": <float 0.0-1.0>,
+  "reasoning_convergence": <float 0.0-1.0>,
+  "semantic_similarity_score": <float — average of the two, for backward compatibility>,
+  "all_point_same_direction": <true/false — based on conclusion_convergence >= 0.5>,
+  "common_conclusion": "<what all 4 are concluding, in one sentence, or null>",
+  "weakest_link": "<which agent diverges most and on which axis>",
+  "convergence_analysis": "<2-3 sentences explaining both axes>"
 }
 
 No other text. No markdown. Just the JSON."""

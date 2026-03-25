@@ -50,6 +50,8 @@ def save_log(query: str, round_results: list, log_dir: str = "logs"):
         s = r['semantic']
         lines.append(f"\n[SEMANTIC JUDGE -- claude-sonnet-4-6]")
         lines.append(f"  Score           : {s.get('semantic_similarity_score', 0):.4f}")
+        lines.append(f"  Conclusion axis : {s.get('conclusion_convergence', s.get('semantic_similarity_score', 0)):.4f}  (x)")
+        lines.append(f"  Reasoning axis  : {s.get('reasoning_convergence', s.get('semantic_similarity_score', 0)):.4f}  (y)")
         lines.append(f"  Same direction  : {s.get('all_point_same_direction', False)}")
         lines.append(f"  Conclusion      : {s.get('common_conclusion', 'None')}")
         lines.append(f"  Weakest link    : {s.get('weakest_link', 'N/A')}")
@@ -148,10 +150,16 @@ def run_multi_round(query: str, n_rounds: int = 3, agents_factory=None):
         print("done")
 
         semantic_score = semantic.get('semantic_similarity_score', 0)
+        conclusion_score = semantic.get('conclusion_convergence', semantic_score)
+        reasoning_score = semantic.get('reasoning_convergence', semantic_score)
         same_direction = semantic.get('all_point_same_direction', False)
 
-        # Claude semantic score -> torus f(x,y) -> singularity
-        judgment = judge.compute_convergence_from_semantic(semantic_score, positions)
+        # Two-axis semantic scores -> independent torus x,y coordinates -> f(x,y) -> singularity
+        judgment = judge.compute_convergence_from_semantic(
+            semantic_score, positions,
+            conclusion_score=conclusion_score,
+            reasoning_score=reasoning_score
+        )
         is_singularity = judgment['is_singularity'] and same_direction
 
         status = "SINGULARITY" if is_singularity else "No singularity"
@@ -159,6 +167,8 @@ def run_multi_round(query: str, n_rounds: int = 3, agents_factory=None):
         print(f"\n  " + "-"*60)
         print(f"  Round {round_num} Results:")
         print(f"    [Semantic] Score:      {semantic_score:.4f}")
+        print(f"    [Semantic] Conclusion: {conclusion_score:.4f}  (x-axis)")
+        print(f"    [Semantic] Reasoning:  {reasoning_score:.4f}  (y-axis)")
         print(f"    [Semantic] Same dir:   {same_direction}")
         print(f"    [Torus]    Coord:      ({judgment['convergence_point'][0]:.4f}, {judgment['convergence_point'][1]:.4f})")
         print(f"    [Torus]    Ratio:      {judgment['singularity_ratio']:.4f}")
@@ -239,8 +249,9 @@ if __name__ == '__main__':
         "have independently analyzed candidate compound profiles from their own data. "
         "Each AI sees only its own data. None can access the others' findings. "
         "The question: based solely on your dataset, "
-        "what is the single most critical variable that any viable treatment must address? "
-        "If all four axes converge on the same variable — that convergence is the answer.",
+        "what properties must any viable treatment satisfy? "
+        "Describe your dataset's non-negotiable requirement. "
+        "If all four axes converge on a compatible compound profile — that convergence is the answer.",
         n_rounds=3,
         agents_factory=create_outbreak_scenario_agents
     )

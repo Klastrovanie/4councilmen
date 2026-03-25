@@ -279,27 +279,55 @@ class JudgeFunction:
 
     def compute_convergence_from_semantic(self,
                                            semantic_score: float,
-                                           positions: list) -> dict:
+                                           positions: list,
+                                           conclusion_score: float = None,
+                                           reasoning_score: float = None) -> dict:
         """
-        Compute torus convergence using Claude semantic score directly.
+        Compute torus convergence using two independent semantic axes.
 
-        This replaces the old sentence-transformer embedding approach.
-        Claude semantic score (0.0-1.0) is the SOLE input.
-        It maps directly to torus coordinates via _similarity_to_coordinate().
+        X-AXIS: conclusion_convergence  — do all 4 agents reach the same answer?
+        Y-AXIS: reasoning_convergence   — do all 4 agents use the same logic?
 
-        semantic_score -> (x, y) on torus -> f(x,y) -> singularity?
+        Each axis maps independently to torus coordinate via _similarity_to_coordinate().
+        This means the 4 agents occupy all 4 quadrants of the torus simultaneously:
 
-        The phone rings only when meaning converges, not words.
+            agent_0: (+x_coord, +y_coord)  — quadrant 1
+            agent_1: (-x_coord, +y_coord)  — quadrant 2
+            agent_2: (-x_coord, -y_coord)  — quadrant 3
+            agent_3: (+x_coord, -y_coord)  — quadrant 4
+
+        Singularity only when BOTH axes converge — the ring forms in all 4 quadrants.
+
+        If conclusion_score and reasoning_score not provided,
+        falls back to semantic_score for both (backward compatible).
         """
-        # Semantic score directly maps to torus coordinate
-        coord = self._similarity_to_coordinate(semantic_score)
-        consensus_value = self.torus.f(coord, coord)
-        is_singularity = self.torus.is_in_singularity(coord, coord)
+        # Use two-axis scores if available, else fall back to single score
+        x_score = conclusion_score if conclusion_score is not None else semantic_score
+        y_score = reasoning_score if reasoning_score is not None else semantic_score
 
-        # Agent movements from their orthogonal positions to convergence point
+        # Map each axis independently to torus coordinate
+        x_coord = self._similarity_to_coordinate(x_score)
+        y_coord = self._similarity_to_coordinate(y_score)
+
+        # Map each axis independently to torus coordinate.
+        # The 4 agents are already assigned to 4 quadrants by design (ConstraintLayer).
+        # agent_0:(+,+) agent_1:(-,+) agent_2:(-,-) agent_3:(+,-)
+        # So +/- assignment is implicit — we only need the magnitude of convergence.
+
+        # f(x,y) at the convergence point
+        # Using the actual 2D torus — x and y are now independent
+        consensus_value = self.torus.f(x_coord, y_coord)
+        is_singularity = self.torus.is_in_singularity(x_coord, y_coord)
+
+        # Agent positions in all 4 quadrants
+        # Each agent moves toward its own quadrant's peak
+        quadrant_signs = [(+1, +1), (-1, +1), (-1, -1), (+1, -1)]
         agent_movements = []
-        for pos in positions:
-            dist = float(np.sqrt((pos[0] - coord)**2 + (pos[1] - coord)**2))
+        for i, pos in enumerate(positions):
+            sx, sy = quadrant_signs[i % 4]
+            target_x = sx * x_coord
+            target_y = sy * y_coord
+            dist = float(np.sqrt((pos[0] - target_x)**2 + (pos[1] - target_y)**2))
             agent_movements.append(dist)
 
         threshold = float(self.torus.singularity['threshold']) if self.torus.singularity else 0
@@ -308,15 +336,17 @@ class JudgeFunction:
         return {
             'is_singularity': is_singularity,
             'consensus_value': float(consensus_value),
-            'convergence_point': (float(coord), float(coord)),
+            'convergence_point': (float(x_coord), float(y_coord)),
+            'conclusion_score': float(x_score),
+            'reasoning_score': float(y_score),
             'semantic_score_input': float(semantic_score),
             'agent_movements': agent_movements,
             'threshold': threshold,
             'singularity_ratio': ratio,
-            # Keep these for log compatibility
+            # Backward compatibility
             'mean_similarity': float(semantic_score),
-            'min_similarity': float(semantic_score),
-            'std_similarity': 0.0,
+            'min_similarity': float(min(x_score, y_score)),
+            'std_similarity': float(abs(x_score - y_score)),
             'all_similarities': [float(semantic_score)] * 6,
         }
 
