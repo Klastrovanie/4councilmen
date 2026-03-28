@@ -310,6 +310,47 @@
   }
 
   .agent-block:last-of-type { border-bottom: 1px solid var(--border); }
+
+  /* Round History */
+  .round-history { margin-top: 24px; }
+  .round-history-title {
+    font-size: 9px; font-weight: 500; letter-spacing: 0.35em;
+    text-transform: uppercase; color: var(--muted); margin-bottom: 12px;
+  }
+  .round-tabs { display: flex; gap: 6px; margin-bottom: 16px; flex-wrap: wrap; }
+  .round-tab {
+    padding: 4px 12px; border-radius: 20px; font-size: 10px; font-weight: 500;
+    letter-spacing: 0.1em; cursor: pointer; border: 1px solid var(--border);
+    background: transparent; color: var(--muted); transition: all 0.2s;
+  }
+  .round-tab.active { background: var(--fg); color: var(--bg); border-color: var(--fg); }
+  .round-tab.singularity { border-color: var(--gold); color: var(--gold); }
+  .round-tab.singularity.active { background: var(--gold); color: #000; }
+  .round-panel { display: none; }
+  .round-panel.active { display: block; }
+  .round-scores {
+    display: flex; gap: 12px; margin-bottom: 14px; flex-wrap: wrap;
+  }
+  .score-pill {
+    padding: 4px 10px; border-radius: 20px; font-size: 10px;
+    border: 1px solid var(--border); color: var(--muted);
+  }
+  .score-pill span { font-weight: 600; color: var(--fg); }
+  .score-pill.sing { border-color: var(--gold); color: var(--gold); }
+  .round-agent-block {
+    border-top: 1px solid var(--border); padding: 12px 0;
+  }
+  .round-agent-name {
+    font-size: 9px; font-weight: 500; letter-spacing: 0.35em;
+    text-transform: uppercase; margin-bottom: 6px;
+  }
+  .round-agent-text { font-size: 13px; line-height: 1.6; color: var(--muted); }
+  .round-analysis {
+    margin-top: 12px; padding: 10px 14px;
+    border-left: 2px solid var(--border);
+    font-size: 12px; color: var(--muted); line-height: 1.6;
+    font-style: italic;
+  }
   .agent-block.visible { opacity: 1; transform: translateY(0); }
 
   .agent-header {
@@ -673,6 +714,11 @@ async function runDemo() {
     document.getElementById('singularityContent').innerHTML = marked.parse(data.conclusion || '');
     document.getElementById('weakestContent').innerHTML = marked.parse(data.weakest_link || '');
     document.getElementById('singularityBlock').classList.add('visible');
+
+    // Render round history
+    if (data.history && data.history.length > 0) {
+      renderRoundHistory(data.history, data.agent_names || {});
+    }
   } catch(e) {
     clearInterval(timer);
     progressWrap.classList.remove('active');
@@ -695,12 +741,82 @@ async function runDemo() {
   }, 800);
 }
 
+function renderRoundHistory(history, agentNames) {
+  var container = document.getElementById('roundHistory');
+  if (!container) return;
+  container.innerHTML = '';
+
+  // Agent color map
+  var colors = { sentinel: 'var(--sentinel)', ethikos: 'var(--ethikos)', auditor: 'var(--auditor)', herald: 'var(--herald)' };
+
+  // Tabs
+  var tabsDiv = document.createElement('div');
+  tabsDiv.className = 'round-tabs';
+
+  var panels = [];
+  history.forEach(function(round, idx) {
+    // Tab
+    var tab = document.createElement('button');
+    tab.className = 'round-tab' + (round.is_singularity ? ' singularity' : '') + (idx === 0 ? ' active' : '');
+    tab.textContent = 'Round ' + round.round + (round.is_singularity ? ' ★' : '');
+    tab.onclick = (function(i) { return function() {
+      document.querySelectorAll('.round-tab').forEach(function(t) { t.classList.remove('active'); });
+      document.querySelectorAll('.round-panel').forEach(function(p) { p.classList.remove('active'); });
+      tab.classList.add('active');
+      panels[i].classList.add('active');
+    }; })(idx);
+    tabsDiv.appendChild(tab);
+
+    // Panel
+    var panel = document.createElement('div');
+    panel.className = 'round-panel' + (idx === 0 ? ' active' : '');
+
+    // Scores
+    var scoresDiv = document.createElement('div');
+    scoresDiv.className = 'round-scores';
+    scoresDiv.innerHTML =
+      '<div class="score-pill">Conclusion <span>' + (round.conclusion_score * 100).toFixed(0) + '%</span></div>' +
+      '<div class="score-pill">Reasoning <span>' + (round.reasoning_score * 100).toFixed(0) + '%</span></div>' +
+      '<div class="score-pill">Torus ratio <span>' + round.torus_ratio.toFixed(2) + '</span></div>' +
+      (round.is_singularity ? '<div class="score-pill sing">★ SINGULARITY</div>' : '');
+    panel.appendChild(scoresDiv);
+
+    // Agent responses
+    Object.keys(round.responses).forEach(function(agentName) {
+      var agentId = agentName.toLowerCase().replace(/\s+/g, '');
+      var color = colors[agentId] || 'var(--fg)';
+      var block = document.createElement('div');
+      block.className = 'round-agent-block';
+      block.innerHTML =
+        '<div class="round-agent-name" style="color:' + color + '">' + agentName + '</div>' +
+        '<div class="round-agent-text">' + marked.parse(round.responses[agentName] || '') + '</div>';
+      panel.appendChild(block);
+    });
+
+    // Analysis
+    if (round.convergence_analysis) {
+      var analysis = document.createElement('div');
+      analysis.className = 'round-analysis';
+      analysis.textContent = round.convergence_analysis;
+      panel.appendChild(analysis);
+    }
+
+    panels.push(panel);
+    container.appendChild(panel);
+  });
+
+  container.insertBefore(tabsDiv, container.firstChild);
+  container.style.display = 'block';
+}
+
 function resetDemo() {
   document.getElementById('selectSection').style.display = 'block';
   document.getElementById('results').classList.remove('active');
   document.getElementById('ctaSection').classList.remove('visible');
   document.getElementById('singularityBlock').classList.remove('visible');
   document.getElementById('tryAgain').classList.remove('visible');
+  var rh = document.getElementById('roundHistory');
+  if (rh) { rh.innerHTML = ''; rh.style.display = 'none'; }
   if (selectedCard) selectedCard.classList.remove('selected');
   selectedCard = null;
   selectedScenario = null;
@@ -854,6 +970,10 @@ function resetDemo() {
         <div class="weakest-label">Weakest Link</div>
         <div id="weakestContent"></div>
       </div>
+    </div>
+
+    <div class="round-history" id="roundHistory" style="display:none">
+      <div class="round-history-title">Round by Round</div>
     </div>
 
     <div class="try-again" id="tryAgain">
