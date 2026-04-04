@@ -140,25 +140,26 @@ That is also an answer.
 ## Possible Applications
 
 **High-stakes decision making**  
-Medical triage, legal judgment, infrastructure safety —  
-situations where a single model's bias can cost lives.  
+Medical triage, legal judgment, infrastructure safety —  situations where a single model's bias can cost lives.  
 
 **AI safety auditing**  
-Four orthogonal models reviewing the same system  
-from different perspectives simultaneously.  
+Four orthogonal models reviewing the same system  from different perspectives simultaneously.  
 
 **Cross-company AI collaboration**  
-Competing AI systems (Grok, Gemini, Claude, GPT-5)  
-solving problems together without sharing weights or training data.  
+Competing AI systems (Grok, Gemini, Claude, GPT-5) solving problems together without sharing weights or training data.  
 
 **Detecting consensus manipulation**  
-If agents converge too easily — the question was too simple,  
-or one agent was compromised.  
+If agents converge too easily — the question was too simple,  or one agent was compromised.  
 
 **Drug discovery and development**  
-Four agents evaluating the same compound from different angles —  
-efficacy, toxicity, cost, and ethical trial design —  
-without sharing assumptions.  
+Four agents evaluating the same compound from different angles — efficacy, toxicity, cost, and ethical trial design —  without sharing assumptions.  
+
+### Patent & IP Evaluation
+Four agents stress-testing the same invention claim — novelty, prior art, commercial viability, and ethical implications — from orthogonal positions.
+
+*Creative critique:* Patent examiners are human and exhausted. 
+A single AI examiner inherits the biases of its training corpus. 
+4CM cannot be lobbied.
 
 ## Run
 
