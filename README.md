@@ -172,6 +172,26 @@ For research use, please replace default Claude API integration with 4 different
 ## Live Demo 
 https://klastrovanie.github.io/4councilmen/   
 
+
+### ⚠️ Demo Note: API Content Policy
+
+Some demo scenarios (e.g., pharmaceutical liability, 
+evidence suppression) may trigger Claude API's 
+built-in content restrictions during live demonstration.
+
+This is expected behavior specific to the Claude API's 
+safety guardrails — not a limitation of the 4CM engine itself.
+
+In production deployments where customers use their own 
+AI API endpoints (fine-tuned models, private deployments, 
+or alternative providers), these restrictions do not apply. 
+The 4CM architecture is model-agnostic by design.
+
+For research and commercial use cases requiring unrestricted 
+agent responses, replace the default Claude API integration 
+with your own model endpoint as noted in the Implementation 
+section above.
+
 ## License
 
 AGPL v3 — free for research and non-commercial use.  
