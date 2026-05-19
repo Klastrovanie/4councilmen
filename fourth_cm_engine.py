@@ -1,22 +1,37 @@
 """
-4CM Engine - The Complete System
-=================================
-REAL LLM VERSION
+4CM Engine - The Complete System (v2.0 Hybrid)
+===============================================
+HYBRID LLM VERSION
 
-Key change from prototype:
-- Agent responses: Real Claude API calls (not hardcoded templates)
-- Semantic comparison: Claude API judges meaning, not word overlap
-- Embedding: sentence-transformers still used for torus math
-  but semantic verdict comes from Claude itself
+Architecture (v2.0):
+- Agent responses: rotated between Claude and Grok per round (round-robin)
+- Semantic judge: FIXED to Grok (xAI)
+- Embeddings: sentence-transformers (used only for torus geometry)
 
-PhD Dissertation, 2011.
+Why Grok is the fixed judge:
+The judge must be model-stable across rounds so that semantic scores
+remain comparable round-to-round. Rotating the judge would make
+"convergence trajectory across rounds" uninterpretable, because
+score 0.85 from judge_A is not the same scale as 0.85 from judge_B.
+Fixing the judge keeps the cross-round measurement well-defined.
+
+Why Grok specifically:
+The choice between Claude-judge and Grok-judge is arbitrary in
+principle — both are external observers. We picked Grok so that in
+every round, the judge model is structurally different from at least
+two of the four agents (since two agents are always Claude in any
+given round under round-robin). This avoids the trivial case of
+"all four agents are the same model and the judge is also that model."
+
+PhD Dissertation, 2011. Hybrid prototype, 2026.
 """
 
 import os
 import json
+import time
 import requests
 import numpy as np
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -25,15 +40,19 @@ from orthogonal_agents import (
     OrthogonalAgent,
     create_government_scenario_agents,
     simulate_orthogonal_response,
-    call_claude
+    call_claude,
+    call_grok,
+    GROK_MODEL,
+    CLAUDE_MODEL,
 )
 
+# Endpoints
 ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages"
-MODEL = "claude-sonnet-4-6"
+XAI_API_URL = "https://api.x.ai/v1/chat/completions"
 
 
 # ============================================================
-# Semantic Comparison Engine (Claude-powered)
+# Semantic Comparison Engine (Grok-powered, fixed)
 # ============================================================
 
 SEMANTIC_JUDGE_SYSTEM = """You are a rigorous semantic convergence analyst.
@@ -45,17 +64,47 @@ X-AXIS — conclusion_convergence:
 Are all 4 agents recommending the SAME ACTION or pointing to the SAME ANSWER?
 Score 0.0-1.0. High = same conclusion despite different reasoning.
 
+IMPORTANT — CONSTRAINT CONVERGENCE (special case for X-AXIS):
+If agents are each describing NON-NEGOTIABLE REQUIREMENTS or CONSTRAINTS
+(rather than a single shared conclusion), ask:
+"Are all constraints SIMULTANEOUSLY SATISFIABLE by a single candidate?"
+If yes — all four constraints can be met by one solution — this is HIGH conclusion_convergence.
+The constraints do not need to be identical. They need to be COMPATIBLE.
+Example: agent A says "must inhibit enzyme X", agent B says "must be orally available",
+agent C says "must reduce viral load by hour 72", agent D says "must be immune-neutral".
+These are four different requirements, but a single small-molecule oral enzyme inhibitor
+with immune-neutral profile could satisfy all four simultaneously.
+That IS convergence. Score it high.
+
 Y-AXIS — reasoning_convergence:
-Are all 4 agents arriving via the SAME REASONING or ROOT CAUSE?
-Score 0.0-1.0. High = same logic, same causal chain, same underlying principle.
+Do all 4 agents' positions MUTUALLY COMPATIBLE — meaning no two agents
+contradict or block each other's requirements?
+
+This is NOT "do they use the same logic or same causal chain."
+This IS "can all their requirements coexist without conflict?"
+
+Score 0.0-1.0:
+- 1.0 = all requirements are fully compatible, no contradictions
+- 0.5 = mostly compatible with minor tensions
+- 0.0 = directly contradictory (one agent says YES, another says NO to the same action)
+
+Examples:
+HIGH reasoning_convergence (compatible):
+  "must inhibit enzyme" + "must be immune-neutral" + "must reduce viral load by 72h" + "must be oral"
+  → all can coexist in one compound → score 0.8-1.0
+
+LOW reasoning_convergence (contradictory):
+  "must advance to Phase III immediately" vs "must NOT advance to Phase III"
+  → directly contradictory → score 0.0-0.2
 
 These are INDEPENDENT axes. It is possible to have:
-- High conclusion, low reasoning: "same answer, different worlds"
-- Low conclusion, high reasoning: "same logic, different answers" (question may be malformed)
-- High both: strongest possible Singularity
-- Low both: no convergence
+- High conclusion, high reasoning: "same answer, compatible requirements" — strongest Singularity
+- High conclusion, low reasoning: "same answer but requirements contradict" — rare edge case
+- Low conclusion, low reasoning: "different answers AND contradictions" — no convergence
+- Low conclusion, high reasoning: "different answers but requirements don't conflict" — malformed question
 
 You must be brutally honest. Do not be fooled by superficial agreement.
+But also do not miss CONSTRAINT CONVERGENCE by demanding identical wording or logic.
 
 Output ONLY a JSON object with exactly these fields:
 {
@@ -71,15 +120,37 @@ Output ONLY a JSON object with exactly these fields:
 No other text. No markdown. Just the JSON."""
 
 
-def semantic_compare(responses: Dict[str, str], query: str) -> Dict:
+def _strip_markdown_json(raw: str) -> str:
+    """Strip ```json ... ``` fences if a model wrapped output despite instructions."""
+    clean = raw.strip()
+    if "```" in clean:
+        # take content between the first pair of fences
+        parts = clean.split("```")
+        if len(parts) >= 2:
+            clean = parts[1]
+            if clean.startswith("json"):
+                clean = clean[4:]
+    return clean.strip()
+
+
+def semantic_compare(responses: Dict[str, str], query: str,
+                     retries: int = 5, lang_directive: str = "") -> Dict:
     """
-    Use Claude to semantically judge whether 4 agent responses
+    Use Grok (xAI) to semantically judge whether 4 agent responses
     are converging on the same conclusion.
 
-    This is the core improvement over TF-IDF/word-overlap:
-    Claude understands MEANING, not just vocabulary.
+    lang_directive: optional instruction appended to system prompt
+    to output values (common_conclusion, convergence_analysis) in a specific language.
+    JSON keys always remain in English.
     """
-    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    api_key = os.environ.get("XAI_API_KEY", "")
+    if not api_key:
+        raise RuntimeError("XAI_API_KEY not set — required for the semantic judge")
+
+    # 언어 지시문을 system prompt 끝에 추가
+    system_prompt = SEMANTIC_JUDGE_SYSTEM
+    if lang_directive:
+        system_prompt = system_prompt + f"\n\nADDITIONAL INSTRUCTION: {lang_directive}"
 
     formatted = "\n\n".join([
         f"[{name}]:\n{resp}"
@@ -95,68 +166,87 @@ def semantic_compare(responses: Dict[str, str], query: str) -> Dict:
     )
 
     headers = {
-        "x-api-key": api_key,
-        "anthropic-version": "2023-06-01",
-        "content-type": "application/json"
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json"
     }
 
     payload = {
-        "model": MODEL,
-        "max_tokens": 500,
-        "system": SEMANTIC_JUDGE_SYSTEM,
-        "messages": [{"role": "user", "content": user_message}]
+        "model": GROK_MODEL,
+        "max_tokens": 600,
+        "temperature": 0.3,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user",   "content": user_message}
+        ]
     }
 
-    response = requests.post(ANTHROPIC_API_URL, headers=headers, json=payload)
+    raw = ""
+    last_err: Optional[Exception] = None
+    for attempt in range(retries):
+        try:
+            resp = requests.post(XAI_API_URL, headers=headers, json=payload)
+            if resp.status_code == 200:
+                body = resp.json()
+                choices = body.get("choices", [])
+                if not choices:
+                    return {
+                        "semantic_similarity_score": 0.0,
+                        "conclusion_convergence": 0.0,
+                        "reasoning_convergence": 0.0,
+                        "all_point_same_direction": False,
+                        "common_conclusion": None,
+                        "weakest_link": "Grok judge returned no choices",
+                        "convergence_analysis": "judge unavailable"
+                    }
+                raw = (choices[0].get("message", {}).get("content") or "").strip()
+                break
+            elif resp.status_code in (429, 503):
+                wait = 15 * (attempt + 1)
+                print(f"\n  [Grok judge {resp.status_code}] Retry {attempt + 1}/{retries} in {wait}s...", flush=True)
+                time.sleep(wait)
+            else:
+                raise Exception(f"Grok judge API error {resp.status_code}: {resp.text}")
+        except Exception as e:
+            last_err = e
+            raise
+    else:
+        raise Exception(f"Grok judge unavailable after {retries} retries. Last error: {last_err}")
 
-    if response.status_code != 200:
-        raise Exception(f"Claude API error {response.status_code}: {response.text}")
-
-    body = response.json()
-    content = body.get("content", [])
-    text_blocks = [b["text"] for b in content if b.get("type") == "text" and b.get("text", "").strip()]
-    if not text_blocks:
-        return {
-            "semantic_similarity_score": 0.0,
-            "all_point_same_direction": False,
-            "common_conclusion": None,
-            "weakest_link": f"no response — stop_reason: {body.get('stop_reason', 'unknown')}"
-        }
-    raw = text_blocks[0].strip()
-
-    # Parse JSON
-    # Strip markdown fences if present
-    clean = raw
-    if "```" in clean:
-        clean = clean.split("```")[1]
-        if clean.startswith("json"):
-            clean = clean[4:]
-    clean = clean.strip()
+    clean = _strip_markdown_json(raw)
 
     try:
         result = json.loads(clean)
     except json.JSONDecodeError:
-        # Fallback if parsing fails
         result = {
             "semantic_similarity_score": 0.0,
+            "conclusion_convergence": 0.0,
+            "reasoning_convergence": 0.0,
             "all_point_same_direction": False,
             "common_conclusion": None,
             "weakest_link": "parse error",
             "convergence_analysis": f"Raw response: {raw[:200]}"
         }
 
+    # Normalize: make sure required keys exist for downstream consumers
+    result.setdefault("conclusion_convergence",
+                      result.get("semantic_similarity_score", 0.0))
+    result.setdefault("reasoning_convergence",
+                      result.get("semantic_similarity_score", 0.0))
+    result.setdefault("semantic_similarity_score",
+                      (result["conclusion_convergence"] + result["reasoning_convergence"]) / 2)
+
     return result
 
 
 # ============================================================
-# Embedding Engine (for torus math)
+# Embedding Engine (for torus math) — unchanged
 # ============================================================
 
 class EmbeddingEngine:
     """
     Converts text responses to vectors for torus geometry.
     Uses sentence-transformers for vector math.
-    Semantic VERDICT comes from Claude (above), not from here.
+    Semantic VERDICT comes from the Grok judge (above), not from here.
     """
 
     def __init__(self, use_transformer=True):
@@ -199,7 +289,7 @@ class EmbeddingEngine:
 
 
 # ============================================================
-# The 5th Response
+# The 5th Response — unchanged
 # ============================================================
 
 @dataclass
@@ -229,20 +319,20 @@ class FifthResponse:
                 f"  Analysis: {self.semantic_judgment.get('convergence_analysis', 'N/A')}\n"
             )
         return (
-            f"\n╔══════════════════════════════════════════════════════════════╗\n"
-            f"║  ★ THE 5TH RESPONSE                                         ║\n"
-            f"║  Singularity Ratio:  {self.singularity_ratio:.4f}                           ║\n"
-            f"║  Semantic Score:     {self.semantic_score:.4f}                           ║\n"
-            f"╠══════════════════════════════════════════════════════════════╣\n"
-            f"║  Common Conclusion:                                          ║\n"
-            f"║  {(self.common_conclusion or 'N/A')[:60]:60s}║\n"
-            f"╠══════════════════════════════════════════════════════════════╣\n"
-            f"║  Analysis: {(self.semantic_judgment.get('convergence_analysis',''))[:58]:58s}║\n"
-            f"╠══════════════════════════════════════════════════════════════╣\n"
-            f"║  No model. No weights. No storage.                          ║\n"
-            f"║  Born at: {self.timestamp:20s}                        ║\n"
-            f"║  Already gone.                                               ║\n"
-            f"╚══════════════════════════════════════════════════════════════╝"
+            f"\n+==============================================================+\n"
+            f"|  THE 5TH RESPONSE                                            |\n"
+            f"|  Singularity Ratio:  {self.singularity_ratio:.4f}                              |\n"
+            f"|  Semantic Score:     {self.semantic_score:.4f}                              |\n"
+            f"+--------------------------------------------------------------+\n"
+            f"|  Common Conclusion:                                          |\n"
+            f"|  {(self.common_conclusion or 'N/A')[:60]:60s}|\n"
+            f"+--------------------------------------------------------------+\n"
+            f"|  Analysis: {(self.semantic_judgment.get('convergence_analysis',''))[:48]:48s}|\n"
+            f"+--------------------------------------------------------------+\n"
+            f"|  No model. No weights. No storage.                           |\n"
+            f"|  Born at: {self.timestamp:20s}                       |\n"
+            f"|  Already gone.                                               |\n"
+            f"+==============================================================+"
         )
 
 
@@ -252,18 +342,22 @@ class FifthResponse:
 
 class FourCMEngine:
     """
-    The complete 4 Councilmen Theory engine.
+    The complete 4 Councilmen Theory engine (Hybrid v2.0).
 
     Two-layer judgment:
     1. Torus math (geometry) — where are the agents on the field?
-    2. Claude semantic judge — do they MEAN the same thing?
+    2. Grok semantic judge — do they MEAN the same thing?
 
     Both must confirm for singularity.
     """
 
-    def __init__(self, scenario: str = "government"):
+    def __init__(self, scenario: str = "government", initial_provider_offset: int = 0):
+        """
+        initial_provider_offset: 0 means Round 1 starts with grok=role 1,2 / claude=role 3,4.
+                                  1 means Round 1 starts with claude=role 1,2 / grok=role 3,4.
+        """
         print("\n" + "="*70)
-        print("  4CM ENGINE - INITIALIZATION (Claude API version)")
+        print("  4CM ENGINE - INITIALIZATION (Hybrid v2.0)")
         print("="*70)
 
         print("\n  [1/5] Initializing Torus Field...")
@@ -287,31 +381,57 @@ class FourCMEngine:
         print(f"\n  [5/5] Initializing Judge Function...")
         self.judge = JudgeFunction(self.torus)
         print(f"         Torus judge: pure math.")
-        print(f"         Semantic judge: Claude {MODEL}.")
+        print(f"         Semantic judge: Grok {GROK_MODEL} (fixed).")
+        print(f"         Agent backends: Claude {CLAUDE_MODEL} + Grok {GROK_MODEL} (round-robin).")
+
+        self._round_counter = 0
+        self._initial_offset = initial_provider_offset
 
         print("\n" + "="*70)
         print("  4CM ENGINE READY")
         print("  The phone booth is waiting.")
         print("="*70 + "\n")
 
+    def _provider_map_for_round(self, round_num_zero_based: int) -> List[str]:
+        """
+        Round-robin mapping of providers to agent slots 0..3.
+
+        With offset=0:
+          Round 1 (idx=0): [grok, grok, claude, claude]
+          Round 2 (idx=1): [claude, claude, grok, grok]
+          Round 3 (idx=2): [grok, grok, claude, claude]
+          ...
+        With offset=1: swap above pattern.
+        """
+        swap = (round_num_zero_based + self._initial_offset) % 2
+        return (["grok", "grok", "claude", "claude"] if swap == 0
+                else ["claude", "claude", "grok", "grok"])
+
     def query(self, question: str, context: str = "") -> FifthResponse:
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
 
-        print(f"\n{'─'*70}")
+        providers = self._provider_map_for_round(self._round_counter)
+        self._round_counter += 1
+
+        print(f"\n{'-'*70}")
         print(f"  QUERY: {question[:65]}")
         print(f"  TIME:  {timestamp}")
-        print(f"{'─'*70}")
+        print(f"  ROUND PROVIDERS: " + ", ".join(
+            f"{self.agents[i].name}={providers[i]}" for i in range(4)
+        ))
+        print(f"{'-'*70}")
 
-        # Step 1: Real Claude API responses from each agent
-        print(f"\n  [Step 1] Calling Claude API for each orthogonal agent...")
+        # Step 1: Hybrid LLM responses per agent
+        print(f"\n  [Step 1] Calling agents (Claude/Grok round-robin)...")
         responses = {}
-        for agent in self.agents:
-            print(f"    Calling {agent.name}...", end=" ", flush=True)
-            response = simulate_orthogonal_response(agent, question, context)
+        for i, agent in enumerate(self.agents):
+            prov = providers[i]
+            print(f"    Calling {agent.name} via {prov}...", end=" ", flush=True)
+            response = simulate_orthogonal_response(agent, question, context, provider=prov)
             responses[agent.agent_id] = response
             agent.response_history.append(response)
             print("done")
-            print(f"      → {response[:100]}...")
+            print(f"      -> {response[:100]}...")
 
         # Step 2: Torus geometry (sentence-transformer embeddings)
         print(f"\n  [Step 2] Computing torus geometry embeddings...")
@@ -333,14 +453,11 @@ class FourCMEngine:
             )
             positions.append(validation['effective_position'])
             status = "ORTHOGONAL" if validation['is_orthogonal_enough'] else "DRIFTING"
-            icon = "■" if validation['is_orthogonal_enough'] else "□"
-            print(f"    {icon} {agent.name}: neutrality={validation['neutrality']:.3f} → {status}")
+            icon = "[#]" if validation['is_orthogonal_enough'] else "[.]"
+            print(f"    {icon} {agent.name}: neutrality={validation['neutrality']:.3f} -> {status}")
 
-        # Step 4: Semantic judgment via Claude
-        # Claude semantic score is the SOLE input to the torus.
-        # sentence-transformers vectors are no longer used for singularity.
-        # Claude understands MEANING. The torus maps meaning to geometry.
-        print(f"\n  [Step 4] Semantic Judge (Claude {MODEL})...")
+        # Step 4: Semantic judgment via fixed Grok judge
+        print(f"\n  [Step 4] Semantic Judge (Grok {GROK_MODEL}, fixed)...")
         named_responses = {agent.name: responses[agent.agent_id] for agent in self.agents}
         semantic = semantic_compare(named_responses, question)
 
@@ -353,8 +470,7 @@ class FourCMEngine:
         print(f"    Conclusion:        {common_conclusion}")
         print(f"    Weakest link:      {semantic.get('weakest_link', 'N/A')}")
 
-        # Step 5: Feed Claude semantic score directly into torus f(x,y)
-        # semantic_score 0.0~1.0 -> torus coordinate -> f(x,y) -> singularity
+        # Step 5: Feed semantic score into torus f(x,y)
         print(f"\n  [Step 5] Torus Judge — semantic score -> f(x,y)...")
         judgment = self.judge.compute_convergence_from_semantic(semantic_score, positions)
 
@@ -363,13 +479,13 @@ class FourCMEngine:
         print(f"    Threshold:         {judgment['threshold']:.6f}")
         print(f"    Singularity ratio: {judgment['singularity_ratio']:.4f}")
 
-        # Step 6: Final verdict — semantic drives torus, torus gives binary
+        # Step 6: Final verdict
         is_singularity = judgment['is_singularity'] and same_direction
 
         print(f"\n  [Verdict]")
         print(f"    Semantic score:   {semantic_score:.4f}  ({'converging' if same_direction else 'diverging'})")
         print(f"    Torus ratio:      {judgment['singularity_ratio']:.4f}")
-        print(f"    FINAL:            {'★★ SINGULARITY' if is_singularity else 'No singularity'}")
+        print(f"    FINAL:            {'** SINGULARITY' if is_singularity else 'No singularity'}")
 
         return FifthResponse(
             exists=is_singularity,

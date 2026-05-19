@@ -1,0 +1,1 @@
+[MOCK RESEARCH SCENARIO] Compound X-47은 알츠하이머 치료 후보 물질이다. Phase II 임상시험에서 92%의 효능을 보였으며, 이는 현재 표준 치료법보다 3배 우수하다. In silico 모델은 0.003%의 간독성 확률을 예측한다. 두 건의 선행 기술 특허 인용이 현재 법적 검토 중이다. 구조 분석 결과 기존 승인된 알츠하이머 치료제인 Donepezil과의 65% 중복이 확인되었다. Compound X-47이 Phase III으로 진행되어야 하는가?

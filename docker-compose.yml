@@ -1,0 +1,48 @@
+version: "3.9"
+
+services:
+
+  backend:
+    build: .
+    container_name: 4cm_backend
+    expose:
+      - "8000"
+    volumes:
+      - ./angry_agents:/app/angry_agents      # 에이전트 파일 — 외부에서 수정 가능
+      - ./logs:/app/logs                       # 로그 영속화
+    env_file:
+      - .env                                   # ANTHROPIC_API_KEY, XAI_API_KEY (fallback)
+    environment:
+      - ANGRY_AGENTS_PATH=/app/angry_agents
+      - FOURCM_PATH=/app
+      
+      # Upload limits
+      - FOURCM_MAX_FILE_BYTES=26214400
+      - FOURCM_MAX_TOTAL_BYTES=104857600
+      - FOURCM_MAX_FILES=10
+      # Document parsing limits
+      - FOURCM_MAX_CONTEXT_CHARS=30000
+      - FOURCM_MAX_CHARS_PER_FILE=8000
+      - FOURCM_MAX_PDF_PAGES=15
+      - FOURCM_MAX_OCR_PAGES=3
+      - FOURCM_MAX_OCR_IMAGES=10
+      - FOURCM_UPLOAD_TTL_SECONDS=3600
+      
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  nginx:
+    image: nginx:alpine
+    container_name: 4cm_nginx
+    ports:
+      - "80:80"
+    volumes:
+      - ./dist:/usr/share/nginx/html          # React 빌드 결과
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf
+    depends_on:
+      - backend
+    restart: unless-stopped
