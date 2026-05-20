@@ -8,8 +8,9 @@ services:
     expose:
       - "8000"
     volumes:
-      - ./angry_agents:/app/angry_agents      # 에이전트 파일 — 외부에서 수정 가능
-      - ./logs:/app/logs                       # 로그 영속화
+      - ./angry_agents:/app/angry_agents       # agent files
+      - ./logs:/app/logs
+      - ./.env:/app/.env                       
     env_file:
       - .env                                   # ANTHROPIC_API_KEY, XAI_API_KEY (fallback)
     environment:
@@ -41,7 +42,7 @@ services:
     ports:
       - "80:80"
     volumes:
-      - ./dist:/usr/share/nginx/html          # React 빌드 결과
+      - ./dist:/usr/share/nginx/html          # React built results
       - ./nginx.conf:/etc/nginx/conf.d/default.conf
     depends_on:
       - backend

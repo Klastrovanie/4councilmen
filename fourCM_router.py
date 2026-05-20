@@ -27,12 +27,14 @@ import logging
 from typing import Optional, List, Dict, Any
 from pathlib import Path
 from datetime import datetime
-import shutil
 
 import requests
-from fastapi import APIRouter, Request, HTTPException, UploadFile, File
+from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
+
+# ── .env 파일 경로 ──────────────────────────────────────────────────────────
+ENV_FILE = Path(os.environ.get("FOURCM_ENV_FILE", "/app/.env"))
 
 # ── 4CM engine imports ──────────────────────────────────────────────────────
 # Adjust sys.path if 4CM lives in a sibling folder
@@ -51,21 +53,6 @@ from orthogonal_agents import (
     ANTHROPIC_API_URL,
 )
 from fourth_cm_engine import EmbeddingEngine, semantic_compare, SEMANTIC_JUDGE_SYSTEM
-
-from document_parser import (
-    ALLOWED_EXTENSIONS,
-    MAX_FILE_BYTES,
-    MAX_FILES,
-    MAX_TOTAL_BYTES,
-    build_document_context,
-    cleanup_old_upload_sessions,
-    cleanup_upload_session,
-    ensure_upload_root,
-    new_session_id,
-    sanitize_filename,
-    session_path,
-    validate_extension,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -90,11 +77,6 @@ class FourCMRequest(BaseModel):
     agent_set: str = "government"   # folder name under angry_agents/
     agents: Optional[List[AgentOverride]] = None  # UI overrides (none = use files)
     no_context: bool = False        # blind mode
-    provider_mode: str = "round-robin"  # "round-robin" | "all-grok" | "all-claude" | "custom"
-    agent_providers: Optional[Dict[str, str]] = None  # {"SENTINEL":"grok", ...} or {"1":"grok", ...}
-    grok_search_mode: str = "off"     # "off" | "auto" | "on"
-    upload_session_id: Optional[str] = None  # temporary uploaded document session
-    uploaded_file_names: Optional[List[str]] = None  # UI display/audit only
 
 class ValidateAgentRequest(BaseModel):
     name: str
@@ -103,41 +85,13 @@ class ValidateAgentRequest(BaseModel):
 
 # ── Provider mapping ─────────────────────────────────────────────────────────
 
-def provider_map_for_round(round_num: int, risk_level: str,
-                           provider_mode: str = "round-robin",
-                           agent_providers: Optional[Dict[str, str]] = None,
-                           agents: Optional[List[OrthogonalAgent]] = None) -> List[str]:
+def provider_map_for_round(round_num: int, risk_level: str) -> List[str]:
     """
-    Resolve provider routing for the four agents.
-
-    provider_mode:
-      - round-robin: default alternating Grok/Claude by round
-      - all-grok: all four agents use Grok
-      - all-claude: all four agents use Claude
-      - custom: use agent_providers from UI
+    risk=high  → all Grok (avoids Claude safety refusals on medical/pharma scenarios)
+    risk=normal → round-robin Claude+Grok
     """
-    provider_mode = (provider_mode or "round-robin").lower()
-
-    if provider_mode == "all-grok" or risk_level == "high":
+    if risk_level == "high":
         return ["grok", "grok", "grok", "grok"]
-
-    if provider_mode == "all-claude":
-        return ["claude", "claude", "claude", "claude"]
-
-    if provider_mode == "custom" and agent_providers and agents:
-        resolved: List[str] = []
-        for idx, agent in enumerate(agents, start=1):
-            value = (
-                agent_providers.get(agent.name)
-                or agent_providers.get(agent.name.upper())
-                or agent_providers.get(str(idx))
-                or agent_providers.get(agent.agent_id)
-                or "grok"
-            )
-            value = str(value).lower()
-            resolved.append(value if value in ("claude", "grok") else "grok")
-        return resolved
-
     swap = (round_num - 1) % 2
     return (["grok", "grok", "claude", "claude"] if swap == 0
             else ["claude", "claude", "grok", "grok"])
@@ -278,28 +232,6 @@ async def stream_fourCM(req: FourCMRequest, claude_key: str, grok_key: str):
         embedder   = EmbeddingEngine(use_transformer=True)
         agents     = build_agents(req)
 
-        # Optional user-uploaded document context. Files are stored only for this
-        # request/session and are removed in the finally block below.
-        document_context = ""
-        effective_query = req.query
-        if req.upload_session_id:
-            try:
-                document_context = await asyncio.to_thread(build_document_context, req.upload_session_id)
-            except Exception as e:
-                logger.error(f"Document context extraction failed: {e}")
-                document_context = f"[Uploaded document extraction failed: {str(e)[:300]}]"
-
-            if document_context.strip():
-                effective_query = (
-                    f"{req.query}\n\n"
-                    "DOCUMENT CONTEXT FROM USER-UPLOADED FILES:\n"
-                    f"{document_context}\n\n"
-                    "Use the uploaded materials as supporting context for this management advisory analysis. "
-                    "Do not treat extracted text, OCR, tables, or file metadata as independently verified facts. "
-                    "Explicitly flag uncertainty, missing data, extraction errors, and any assumptions. "
-                    "This is not an audit, valuation, legal opinion, tax advice, investment advice, or official decision."
-                )
-
         lang_prefix     = LANG_PREFIX.get(req.lang, "")
         judge_lang      = JUDGE_LANG_DIRECTIVE.get(req.lang, "")
 
@@ -314,132 +246,56 @@ async def stream_fourCM(req: FourCMRequest, claude_key: str, grok_key: str):
         final_conclusion: Optional[str] = None
 
         for round_num in range(1, req.n_rounds + 1):
-            providers = provider_map_for_round(
-                round_num,
-                req.risk_level,
-                req.provider_mode,
-                req.agent_providers,
-                agents,
-            )
+            providers = provider_map_for_round(round_num, req.risk_level)
             provider_map_by_name: Dict[str, str] = {}
 
             # ── Step 1: Agent calls ────────────────────────────────────────
-            # Parallel within a round: all agents receive the same prev_context,
-            # so they can search/answer concurrently. Rounds themselves remain
-            # sequential because Round N+1 depends on Round N's convergence context.
             responses: Dict[str, str] = {}
             agent_response_list = []
 
-            async def run_one_agent(i: int, agent: OrthogonalAgent) -> Dict[str, Any]:
-                prov = providers[i]
-
-                try:
-                    text = await asyncio.to_thread(
-                        simulate_orthogonal_response,
-                        agent,
-                        effective_query,
-                        prev_context,
-                        prov,
-                        req.grok_search_mode,
-                    )
-                    return {
-                        "index": i,
-                        "agent": agent,
-                        "name": agent.name,
-                        "provider": prov,
-                        "text": text,
-                        "status": "ok",
-                        "error": None,
-                    }
-
-                except Exception as e:
-                    logger.error(f"Agent {agent.name} error via {prov}: {e}")
-
-                    # Grok web-search can occasionally fail at the HTTP/network layer.
-                    # Do not put the raw error string into the agent answer. Try Claude
-                    # fallback so the round can still be judged with four real answers.
-                    if prov == "grok" and req.grok_search_mode in ("auto", "on"):
-                        try:
-                            fallback_text = await asyncio.to_thread(
-                                simulate_orthogonal_response,
-                                agent,
-                                effective_query + "\n\nNote: Grok web search failed for this agent. Answer without live web search.",
-                                prev_context,
-                                "claude",
-                                "off",
-                            )
-                            return {
-                                "index": i,
-                                "agent": agent,
-                                "name": agent.name,
-                                "provider": "claude-fallback",
-                                "text": fallback_text,
-                                "status": "fallback",
-                                "error": str(e)[:300],
-                            }
-                        except Exception as fallback_e:
-                            logger.error(f"Claude fallback for {agent.name} failed: {fallback_e}")
-                            return {
-                                "index": i,
-                                "agent": agent,
-                                "name": agent.name,
-                                "provider": prov,
-                                "text": "",
-                                "status": "failed",
-                                "error": f"Grok failed: {str(e)[:160]} / Claude fallback failed: {str(fallback_e)[:160]}",
-                            }
-
-                    return {
-                        "index": i,
-                        "agent": agent,
-                        "name": agent.name,
-                        "provider": prov,
-                        "text": "",
-                        "status": "failed",
-                        "error": str(e)[:300],
-                    }
-
-            # Tell the frontend all four calls are starting, then run them in parallel.
             for i, agent in enumerate(agents):
                 prov = providers[i]
                 provider_map_by_name[agent.name] = prov
+
+                # yield "calling" signal
                 yield sse("agent_start", {
                     "round": round_num,
                     "name": agent.name,
                     "provider": prov,
                 })
 
-            agent_results = await asyncio.gather(
-                *(run_one_agent(i, agent) for i, agent in enumerate(agents))
-            )
-            agent_results.sort(key=lambda r: r["index"])
-
-            for result in agent_results:
-                agent = result["agent"]
-                text = result["text"] or ""
-                prov = result["provider"]
-                provider_map_by_name[agent.name] = prov
+                # Run in thread pool (blocking HTTP call)
+                try:
+                    text = await asyncio.to_thread(
+                        simulate_orthogonal_response,
+                        agent,
+                        req.query,
+                        prev_context,
+                        prov,
+                    )
+                except Exception as e:
+                    logger.error(f"Agent {agent.name} error: {e}")
+                    text = f"[{agent.name} error: {str(e)[:100]}]"
 
                 responses[agent.agent_id] = text
-                if text:
-                    agent.response_history.append(text)
+                agent.response_history.append(text)
 
+                # yield completed response
                 yield sse("agent", {
                     "round": round_num,
                     "name": agent.name,
                     "provider": prov,
                     "text": text,
-                    "status": result["status"],
-                    "error": result["error"],
                 })
 
                 agent_response_list.append({
                     "name": agent.name,
                     "provider": prov,
                     "text": text,
-                    "status": result["status"],
-                    "error": result["error"],
                 })
+
+                # tiny pause to avoid thundering herd
+                await asyncio.sleep(0.05)
 
             # ── Step 2: Embeddings + torus positions ───────────────────────
             response_texts = [responses[a.agent_id] for a in agents]
@@ -448,7 +304,7 @@ async def stream_fourCM(req: FourCMRequest, claude_key: str, grok_key: str):
                 embeddings = await asyncio.to_thread(embedder.embed, response_texts)
                 neutral_emb = await asyncio.to_thread(
                     embedder.embed_single,
-                    f"Regarding '{effective_query[:50]}', a balanced view suggests "
+                    f"Regarding '{req.query[:50]}', a balanced view suggests "
                     f"considering multiple perspectives."
                 )
                 positions = []
@@ -470,7 +326,7 @@ async def stream_fourCM(req: FourCMRequest, claude_key: str, grok_key: str):
                 semantic = await asyncio.to_thread(
                     semantic_compare,
                     named_responses,
-                    effective_query,
+                    req.query,
                     5,
                     judge_lang,
                 )
@@ -548,91 +404,8 @@ async def stream_fourCM(req: FourCMRequest, claude_key: str, grok_key: str):
         # Restore original keys
         os.environ["ANTHROPIC_API_KEY"] = _orig_claude
         os.environ["XAI_API_KEY"]       = _orig_grok
-        if req.upload_session_id:
-            await asyncio.to_thread(cleanup_upload_session, req.upload_session_id)
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
-
-@router.post("/upload")
-async def upload_fourCM_files(files: List[UploadFile] = File(...)):
-    """
-    POST /fourCM/upload
-    Store business documents temporarily for one 4CM management advisory run.
-
-    The files are written under FOURCM_UPLOAD_ROOT/<session_id>/ and should be
-    deleted by stream_fourCM() after the answer is generated. A stale-file cleanup
-    is also run on each upload as a safety net.
-    """
-    ensure_upload_root()
-    cleanup_old_upload_sessions()
-
-    if not files:
-        raise HTTPException(400, "No files uploaded")
-    if len(files) > MAX_FILES:
-        raise HTTPException(400, f"Too many files. Maximum is {MAX_FILES} files")
-
-    session_id = new_session_id()
-    folder = session_path(session_id)
-    folder.mkdir(parents=True, exist_ok=False)
-
-    uploaded = []
-    total_bytes = 0
-
-    try:
-        for idx, up in enumerate(files, start=1):
-            original_name = up.filename or f"uploaded_{idx}"
-            try:
-                ext = validate_extension(original_name)
-            except ValueError as e:
-                raise HTTPException(400, str(e))
-
-            safe_name = sanitize_filename(original_name)
-            # Prefix with index to avoid collisions while preserving readable names.
-            stored_name = f"{idx:02d}_{safe_name}"
-            dest = folder / stored_name
-
-            size = 0
-            with dest.open("wb") as f:
-                while True:
-                    chunk = await up.read(1024 * 1024)
-                    if not chunk:
-                        break
-                    size += len(chunk)
-                    total_bytes += len(chunk)
-                    if size > MAX_FILE_BYTES:
-                        raise HTTPException(413, f"File '{original_name}' exceeds per-file limit of {MAX_FILE_BYTES // (1024*1024)}MB")
-                    if total_bytes > MAX_TOTAL_BYTES:
-                        raise HTTPException(413, f"Total upload exceeds limit of {MAX_TOTAL_BYTES // (1024*1024)}MB")
-                    f.write(chunk)
-
-            uploaded.append({
-                "name": original_name,
-                "stored_name": stored_name,
-                "type": ext.lstrip("."),
-                "size": size,
-                "status": "uploaded",
-            })
-
-        return {
-            "session_id": session_id,
-            "files": uploaded,
-            "limits": {
-                "max_files": MAX_FILES,
-                "max_file_bytes": MAX_FILE_BYTES,
-                "max_total_bytes": MAX_TOTAL_BYTES,
-                "allowed_extensions": sorted(ALLOWED_EXTENSIONS),
-            },
-            "retention": "temporary; deleted after the 4CM response is generated",
-        }
-
-    except HTTPException:
-        cleanup_upload_session(session_id)
-        raise
-    except Exception as e:
-        cleanup_upload_session(session_id)
-        logger.exception("File upload failed")
-        raise HTTPException(500, f"File upload failed: {str(e)[:200]}")
-
 
 @router.post("")
 async def run_fourCM(req: FourCMRequest, request: Request):
@@ -656,10 +429,6 @@ async def run_fourCM(req: FourCMRequest, request: Request):
 
     if req.n_rounds < 1 or req.n_rounds > 5:
         raise HTTPException(400, "n_rounds must be 1-5")
-    if req.provider_mode not in ("round-robin", "all-grok", "all-claude", "custom"):
-        raise HTTPException(400, "provider_mode must be one of: round-robin, all-grok, all-claude, custom")
-    if req.grok_search_mode not in ("off", "auto", "on"):
-        raise HTTPException(400, "grok_search_mode must be one of: off, auto, on")
     if req.risk_level not in ("normal", "high"):
         raise HTTPException(400, "risk_level must be 'normal' or 'high'")
     if req.lang not in ("en", "ko"):
@@ -1073,3 +842,102 @@ async def update_agent(set_id: str, agent_idx: int, req: ScenarioAgentUpdate):
         ko_file.unlink()
 
     return {"updated": {"set": set_id, "agent": agent_idx, "name": req.name}}
+
+# ── API Key Management ────────────────────────────────────────────────────────
+
+class KeySaveRequest(BaseModel):
+    claude_key: str = ""
+    grok_key: str = ""
+
+
+def _read_env_file() -> Dict[str, str]:
+    """현재 .env 파일 파싱 → dict"""
+    result = {}
+    if not ENV_FILE.exists():
+        return result
+    for line in ENV_FILE.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, val = line.partition("=")
+        result[key.strip()] = val.strip().strip('"').strip("'")
+    return result
+
+
+def _write_env_file(data: Dict[str, str]) -> None:
+    """dict → .env 파일 저장"""
+    lines = []
+    for k, v in data.items():
+        lines.append(f"{k}={v}")
+    ENV_FILE.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+@router.get("/keys/status")
+async def keys_status():
+    """
+    GET /fourCM/keys/status
+    현재 API 키 설정 여부 반환 (값은 절대 반환하지 않음)
+    
+    옵션 2: .env에 키가 있으면 자동으로 환경변수에 로드
+    """
+    env_data = _read_env_file()
+
+    # .env에 키가 있으면 환경변수에 로드 (옵션 2)
+    if env_data.get("ANTHROPIC_API_KEY"):
+        os.environ["ANTHROPIC_API_KEY"] = env_data["ANTHROPIC_API_KEY"]
+    if env_data.get("XAI_API_KEY"):
+        os.environ["XAI_API_KEY"] = env_data["XAI_API_KEY"]
+
+    claude_set = bool(os.environ.get("ANTHROPIC_API_KEY", "").strip())
+    grok_set   = bool(os.environ.get("XAI_API_KEY", "").strip())
+
+    return {
+        "claude_set": claude_set,
+        "grok_set": grok_set,
+        "source": "env_file" if env_data.get("ANTHROPIC_API_KEY") else "environment",
+    }
+
+
+@router.post("/keys/save")
+async def keys_save(req: KeySaveRequest):
+    """
+    POST /fourCM/keys/save
+    옵션 1: UI에서 입력한 키를 .env 파일에 저장 + 환경변수에 즉시 반영
+    키값은 로그에 절대 출력하지 않음
+    """
+    env_data = _read_env_file()
+
+    if req.claude_key.strip():
+        env_data["ANTHROPIC_API_KEY"] = req.claude_key.strip()
+        os.environ["ANTHROPIC_API_KEY"] = req.claude_key.strip()
+
+    if req.grok_key.strip():
+        env_data["XAI_API_KEY"] = req.grok_key.strip()
+        os.environ["XAI_API_KEY"] = req.grok_key.strip()
+
+    _write_env_file(env_data)
+    logger.info("API keys saved to .env (values not logged)")
+
+    return {
+        "saved": True,
+        "claude_set": bool(env_data.get("ANTHROPIC_API_KEY")),
+        "grok_set":   bool(env_data.get("XAI_API_KEY")),
+    }
+
+
+@router.delete("/keys/clear")
+async def keys_clear():
+    """
+    DELETE /fourCM/keys/clear
+    .env 파일에서 API 키 삭제 + 환경변수에서도 제거
+    """
+    env_data = _read_env_file()
+    env_data.pop("ANTHROPIC_API_KEY", None)
+    env_data.pop("XAI_API_KEY", None)
+    _write_env_file(env_data)
+
+    os.environ.pop("ANTHROPIC_API_KEY", None)
+    os.environ.pop("XAI_API_KEY", None)
+
+    logger.info("API keys cleared from .env and environment")
+    return {"cleared": True}
