@@ -29,7 +29,7 @@ from pathlib import Path
 from datetime import datetime
 
 import requests
-from fastapi import APIRouter, Request, HTTPException
+from fastapi import APIRouter, Request, HTTPException, UploadFile, File
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
@@ -53,6 +53,12 @@ from orthogonal_agents import (
     ANTHROPIC_API_URL,
 )
 from fourth_cm_engine import EmbeddingEngine, semantic_compare, SEMANTIC_JUDGE_SYSTEM
+from document_parser import (
+    MAX_FILES, MAX_FILE_BYTES, MAX_TOTAL_BYTES,
+    build_document_context, cleanup_upload_session, ensure_upload_root,
+    list_session_files, new_session_id, sanitize_filename, session_path,
+    validate_extension,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -78,6 +84,15 @@ class FourCMRequest(BaseModel):
     agents: Optional[List[AgentOverride]] = None  # UI overrides (none = use files)
     no_context: bool = False        # blind mode
 
+    # Provider routing / Grok web-search controls.
+    # provider_mode: round-robin | all-grok | all-claude | custom
+    provider_mode: str = "round-robin"
+    agent_providers: Optional[Dict[str, str]] = None
+    grok_search_mode: str = "off"   # off | auto | on; applies only to Grok calls
+
+    # Optional temporary upload session created by POST /fourCM/uploads
+    upload_session_id: Optional[str] = None
+
 class ValidateAgentRequest(BaseModel):
     name: str
     prompt: str
@@ -85,11 +100,37 @@ class ValidateAgentRequest(BaseModel):
 
 # ── Provider mapping ─────────────────────────────────────────────────────────
 
-def provider_map_for_round(round_num: int, risk_level: str) -> List[str]:
-    """
-    risk=high  → all Grok (avoids Claude safety refusals on medical/pharma scenarios)
-    risk=normal → round-robin Claude+Grok
-    """
+def provider_map_for_round(
+    round_num: int,
+    risk_level: str,
+    provider_mode: str = "round-robin",
+    agents: Optional[List[OrthogonalAgent]] = None,
+    agent_providers: Optional[Dict[str, str]] = None,
+) -> List[str]:
+    """Provider routing for a round."""
+    mode = (provider_mode or "round-robin").lower()
+    canonical = ["SENTINEL", "ETHIKOS", "AUDITOR", "HERALD"]
+
+    if mode == "all-grok":
+        return ["grok", "grok", "grok", "grok"]
+    if mode == "all-claude":
+        return ["claude", "claude", "claude", "claude"]
+    if mode == "custom":
+        out = []
+        plan = agent_providers or {}
+        for i in range(4):
+            agent_name = agents[i].name if agents and i < len(agents) else canonical[i]
+            raw = (
+                plan.get(agent_name)
+                or plan.get(canonical[i])
+                or plan.get(str(i + 1))
+                or plan.get(f"agent_{i}")
+                or "grok"
+            )
+            prov = str(raw).lower()
+            out.append(prov if prov in ("claude", "grok") else "grok")
+        return out
+
     if risk_level == "high":
         return ["grok", "grok", "grok", "grok"]
     swap = (round_num - 1) % 2
@@ -209,6 +250,74 @@ def sse(event_type: str, data: Any) -> str:
 def sse_done() -> str:
     return "data: [DONE]\n\n"
 
+# ── Document upload endpoints ────────────────────────────────────────────────
+
+@router.post("/uploads")
+async def upload_documents(files: List[UploadFile] = File(...)):
+    """Store uploaded documents temporarily and return an upload_session_id."""
+    ensure_upload_root()
+    if not files:
+        raise HTTPException(400, "No files uploaded")
+    if len(files) > MAX_FILES:
+        raise HTTPException(400, f"Too many files. Max {MAX_FILES}")
+
+    session_id = new_session_id()
+    folder = session_path(session_id)
+    folder.mkdir(parents=True, exist_ok=True)
+
+    stored = []
+    total = 0
+    try:
+        for f in files:
+            original = f.filename or "uploaded_file"
+            ext = validate_extension(original)
+            safe = sanitize_filename(original)
+            content = await f.read()
+            size = len(content)
+            if size > MAX_FILE_BYTES:
+                raise HTTPException(413, f"{original} exceeds per-file limit")
+            total += size
+            if total > MAX_TOTAL_BYTES:
+                raise HTTPException(413, "Upload exceeds total size limit")
+
+            target = folder / safe
+            if target.exists():
+                stem, suffix = target.stem, target.suffix
+                n = 2
+                while target.exists():
+                    target = folder / f"{stem}_{n}{suffix}"
+                    n += 1
+            target.write_bytes(content)
+            stored.append({
+                "original_name": original,
+                "stored_name": target.name,
+                "size": size,
+                "extension": ext,
+            })
+
+        return {"upload_session_id": session_id, "files": stored, "count": len(stored)}
+    except Exception:
+        cleanup_upload_session(session_id)
+        raise
+
+
+@router.get("/uploads/{session_id}")
+async def upload_status(session_id: str):
+    files = list_session_files(session_id)
+    return {
+        "upload_session_id": session_id,
+        "files": [
+            {"stored_name": p.name, "size": p.stat().st_size, "extension": p.suffix.lower()}
+            for p in files
+        ],
+    }
+
+
+@router.delete("/uploads/{session_id}")
+async def upload_delete(session_id: str):
+    cleanup_upload_session(session_id)
+    return {"deleted": True, "upload_session_id": session_id}
+
 # ── Core streaming generator ──────────────────────────────────────────────────
 
 async def stream_fourCM(req: FourCMRequest, claude_key: str, grok_key: str):
@@ -241,61 +350,98 @@ async def stream_fourCM(req: FourCMRequest, claude_key: str, grok_key: str):
                 if not agent.system_prompt.startswith(lang_prefix):
                     agent.system_prompt = lang_prefix + agent.system_prompt
 
+        # Optional document context from uploaded files.
+        document_context = ""
+        if req.upload_session_id:
+            try:
+                document_context = build_document_context(req.upload_session_id)
+            except Exception as e:
+                logger.error(f"Document context build failed: {e}")
+                document_context = f"[Uploaded document context unavailable: {str(e)[:200]}]"
+
+        base_query = req.query
+        if document_context:
+            base_query = (
+                f"{req.query}\n\n"
+                "Use the following uploaded document context as evidence. "
+                "When the document conflicts with general knowledge, explicitly mention the conflict.\n\n"
+                f"{document_context}"
+            )
+
         prev_context = ""
         first_singularity_round: Optional[int] = None
         final_conclusion: Optional[str] = None
 
         for round_num in range(1, req.n_rounds + 1):
-            providers = provider_map_for_round(round_num, req.risk_level)
+            providers = provider_map_for_round(round_num, req.risk_level, req.provider_mode, agents, req.agent_providers)
             provider_map_by_name: Dict[str, str] = {}
 
             # ── Step 1: Agent calls ────────────────────────────────────────
+            # Same-round agents run in parallel. Rounds remain sequential because
+            # Round N+1 may use Round N as prev_context.
             responses: Dict[str, str] = {}
             agent_response_list = []
 
-            for i, agent in enumerate(agents):
-                prov = providers[i]
-                provider_map_by_name[agent.name] = prov
-
-                # yield "calling" signal
-                yield sse("agent_start", {
-                    "round": round_num,
-                    "name": agent.name,
-                    "provider": prov,
-                })
-
-                # Run in thread pool (blocking HTTP call)
+            async def run_one_agent(i: int, agent: OrthogonalAgent, prov: str) -> Dict[str, Any]:
                 try:
                     text = await asyncio.to_thread(
                         simulate_orthogonal_response,
                         agent,
-                        req.query,
+                        base_query,
                         prev_context,
                         prov,
+                        req.grok_search_mode,
                     )
+                    return {"agent": agent, "name": agent.name, "provider": prov, "text": text, "status": "ok", "error": None}
                 except Exception as e:
-                    logger.error(f"Agent {agent.name} error: {e}")
-                    text = f"[{agent.name} error: {str(e)[:100]}]"
+                    logger.error(f"Agent {agent.name} error via {prov}: {e}")
+                    if prov == "grok" and req.grok_search_mode in ("auto", "on"):
+                        try:
+                            fallback_text = await asyncio.to_thread(
+                                simulate_orthogonal_response,
+                                agent,
+                                base_query + "\n\nNote: Grok web search failed for this agent. Answer without live web search, and state that no live web verification was available.",
+                                prev_context,
+                                "claude",
+                                "off",
+                            )
+                            return {"agent": agent, "name": agent.name, "provider": "claude-fallback", "text": fallback_text, "status": "fallback", "error": str(e)[:300]}
+                        except Exception as fallback_e:
+                            return {"agent": agent, "name": agent.name, "provider": prov, "text": "", "status": "failed", "error": f"Grok failed: {str(e)[:160]} / Claude fallback failed: {str(fallback_e)[:160]}"}
+                    return {"agent": agent, "name": agent.name, "provider": prov, "text": "", "status": "failed", "error": str(e)[:300]}
 
+            for i, agent in enumerate(agents):
+                yield sse("agent_start", {"round": round_num, "name": agent.name, "provider": providers[i]})
+
+            agent_results = await asyncio.gather(*[
+                run_one_agent(i, agent, providers[i])
+                for i, agent in enumerate(agents)
+            ])
+
+            for result in agent_results:
+                agent = result["agent"]
+                provider_map_by_name[agent.name] = result["provider"]
+                text = result["text"] or ""
                 responses[agent.agent_id] = text
-                agent.response_history.append(text)
+                if text:
+                    agent.response_history.append(text)
 
-                # yield completed response
                 yield sse("agent", {
                     "round": round_num,
                     "name": agent.name,
-                    "provider": prov,
+                    "provider": result["provider"],
                     "text": text,
+                    "status": result["status"],
+                    "error": result["error"],
                 })
 
                 agent_response_list.append({
                     "name": agent.name,
-                    "provider": prov,
+                    "provider": result["provider"],
                     "text": text,
+                    "status": result["status"],
+                    "error": result["error"],
                 })
-
-                # tiny pause to avoid thundering herd
-                await asyncio.sleep(0.05)
 
             # ── Step 2: Embeddings + torus positions ───────────────────────
             response_texts = [responses[a.agent_id] for a in agents]
@@ -404,6 +550,8 @@ async def stream_fourCM(req: FourCMRequest, claude_key: str, grok_key: str):
         # Restore original keys
         os.environ["ANTHROPIC_API_KEY"] = _orig_claude
         os.environ["XAI_API_KEY"]       = _orig_grok
+        if req.upload_session_id:
+            cleanup_upload_session(req.upload_session_id)
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
 
@@ -433,6 +581,10 @@ async def run_fourCM(req: FourCMRequest, request: Request):
         raise HTTPException(400, "risk_level must be 'normal' or 'high'")
     if req.lang not in ("en", "ko"):
         raise HTTPException(400, "lang must be 'en' or 'ko'")
+    if req.provider_mode not in ("round-robin", "all-grok", "all-claude", "custom"):
+        raise HTTPException(400, "provider_mode must be round-robin, all-grok, all-claude, or custom")
+    if req.grok_search_mode not in ("off", "auto", "on"):
+        raise HTTPException(400, "grok_search_mode must be off, auto, or on")
 
     return StreamingResponse(
         stream_fourCM(req, claude_key, grok_key),
