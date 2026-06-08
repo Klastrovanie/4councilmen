@@ -20,6 +20,11 @@
     --text: #1a1a1a;
     --muted: #8a8278;
     --light: #f0ece6;
+    /* Fix Bug#2: previously undefined variables */
+    --fg:   #1a1a2e;
+    --gold: #c8a96e;
+    --ink:  #1a1a1a;
+    --neon: #00ff41;
   }
 
   * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -397,11 +402,65 @@
     margin-top: 16px;
     opacity: 0;
     transform: translateY(8px);
-    transition: opacity 0.6s ease, transform 0.6s ease;
+    transition: opacity 0.6s ease, transform 0.6s ease, border-color 0.4s ease, box-shadow 0.4s ease;
     box-shadow: 0 4px 24px rgba(200,169,110,0.12);
   }
 
   .singularity-block.visible { opacity: 1; transform: translateY(0); }
+
+  /* Neon green glow when true singularity */
+  .singularity-block.is-singularity {
+    border-color: var(--neon);
+    background: #f6fff8;
+    box-shadow:
+      0 0 0 1px rgba(0,255,65,0.25),
+      0 0 12px rgba(0,255,65,0.45),
+      0 0 28px rgba(0,255,65,0.25),
+      0 0 56px rgba(0,255,65,0.12),
+      0 4px 24px rgba(0,255,65,0.10);
+    animation: neon-pulse 2.4s ease-in-out infinite;
+  }
+
+  @keyframes neon-pulse {
+    0%, 100% {
+      box-shadow:
+        0 0 0 1px rgba(0,255,65,0.25),
+        0 0 12px rgba(0,255,65,0.45),
+        0 0 28px rgba(0,255,65,0.25),
+        0 0 56px rgba(0,255,65,0.12);
+    }
+    50% {
+      box-shadow:
+        0 0 0 1px rgba(0,255,65,0.45),
+        0 0 20px rgba(0,255,65,0.65),
+        0 0 44px rgba(0,255,65,0.40),
+        0 0 80px rgba(0,255,65,0.20);
+    }
+  }
+
+  .singularity-block.is-singularity .singularity-header {
+    background: rgba(0, 255, 65, 0.06);
+    border-bottom-color: rgba(0,255,65,0.30);
+  }
+
+  .singularity-block.is-singularity .star-icon {
+    color: var(--neon);
+    text-shadow: 0 0 8px rgba(0,255,65,0.8);
+  }
+
+  .singularity-block.is-singularity .singularity-label {
+    color: var(--neon);
+    text-shadow: 0 0 6px rgba(0,255,65,0.5);
+  }
+
+  .singularity-block.is-singularity .weakest-block {
+    border-top-color: rgba(0,255,65,0.20);
+    background: rgba(0,255,65,0.03);
+  }
+
+  .singularity-block.is-singularity .weakest-label {
+    color: var(--neon);
+  }
 
   .singularity-header {
     display: flex;
@@ -666,6 +725,20 @@ function setAgentStatus(id, done) {
     : '<span class="pulse" style="background:currentColor"></span> analyzing';
 }
 
+function renderText(text) {
+  text = text || '';
+
+  if (window.marked && typeof marked.parse === 'function') {
+    return marked.parse(text);
+  }
+
+  return String(text)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/\n/g, '<br>');
+}
+
 async function call4CM(scenarioIndex) {
   var res = await fetch(LAMBDA_URL, {
     method: 'POST',
@@ -716,6 +789,8 @@ async function runDemo() {
   runBtn.textContent = 'Running...';
   runHint.style.display = 'none';
   progressWrap.classList.add('active');
+  progressFill.style.width = '0%';
+  progressFill.style.background = '';
 
   var steps = [
     [10, 'Initializing 4CM...'],
@@ -769,12 +844,18 @@ async function runDemo() {
       var nameMap = data.agent_names || {};
       var nameEl = document.getElementById('agentname-' + a.id);
       if (nameEl && nameMap[a.id]) nameEl.textContent = nameMap[a.id];
-      document.getElementById('content-' + a.id).innerHTML = marked.parse((data.responses && data.responses[a.id]) || '');
+      document.getElementById('content-' + a.id).innerHTML = renderText((data.responses && data.responses[a.id]) || '');
       setAgentStatus(a.id, true);
     });
-    document.getElementById('singularityContent').innerHTML = marked.parse(data.conclusion || '');
-    document.getElementById('weakestContent').innerHTML = marked.parse(data.weakest_link || '');
-    document.getElementById('singularityBlock').classList.add('visible');
+    document.getElementById('singularityContent').innerHTML = renderText(data.conclusion || '');
+    document.getElementById('weakestContent').innerHTML = renderText(data.weakest_link || '');
+    var sBlock = document.getElementById('singularityBlock');
+    if (data.is_singularity) {
+      sBlock.classList.add('is-singularity');
+    } else {
+      sBlock.classList.remove('is-singularity');
+    }
+    sBlock.classList.add('visible');
 
     // Render round history
     if (data.history && data.history.length > 0) {
@@ -791,7 +872,12 @@ async function runDemo() {
       progressFill.style.background = '#c0392b';
       progressLabel.textContent = 'Error. Please try again.';
       console.error(e);
-      AGENTS.forEach(function(a) { setAgentStatus(a.id, true); });
+      AGENTS.forEach(function(a) {
+        var el = document.getElementById('status-' + a.id);
+        if (el) {
+          el.innerHTML = '<span style="color:#c0392b;font-size:9px;letter-spacing:0.1em">error</span>';
+        }
+      });
     }
   }
 
@@ -850,7 +936,7 @@ function renderRoundHistory(history, agentNames) {
       block.className = 'round-agent-block';
       block.innerHTML =
         '<div class="round-agent-name" style="color:' + color + '">' + agentName + '</div>' +
-        '<div class="round-agent-text">' + marked.parse(round.responses[agentName] || '') + '</div>';
+        '<div class="round-agent-text">' + renderText(round.responses[agentName] || '') + '</div>';
       panel.appendChild(block);
     });
 
@@ -905,25 +991,35 @@ async function translateResults() {
       body: JSON.stringify(payload)
     });
 
+    var text = await res.text();
+
     if (!res.ok) {
-      throw new Error('Translation failed: ' + res.status);
+      throw new Error('Translation failed: ' + res.status + ' / ' + text);
     }
 
-    var data = await res.json();
+    var data = JSON.parse(text);
+
+    if (data && data.body && typeof data.body === 'string') {
+      data = JSON.parse(data.body);
+    }
+
+    if (data.error) {
+      throw new Error(data.error);
+    }
 
     if (data.responses) {
-      document.getElementById('content-sentinel').innerHTML = marked.parse(data.responses.sentinel || '');
-      document.getElementById('content-ethikos').innerHTML = marked.parse(data.responses.ethikos || '');
-      document.getElementById('content-auditor').innerHTML = marked.parse(data.responses.auditor || '');
-      document.getElementById('content-herald').innerHTML = marked.parse(data.responses.herald || '');
+      document.getElementById('content-sentinel').innerHTML = renderText(data.responses.sentinel || '');
+      document.getElementById('content-ethikos').innerHTML = renderText(data.responses.ethikos || '');
+      document.getElementById('content-auditor').innerHTML = renderText(data.responses.auditor || '');
+      document.getElementById('content-herald').innerHTML = renderText(data.responses.herald || '');
     }
 
     if (data.conclusion) {
-      document.getElementById('singularityContent').innerHTML = marked.parse(data.conclusion);
+      document.getElementById('singularityContent').innerHTML = renderText(data.conclusion);
     }
 
     if (data.weakest_link) {
-      document.getElementById('weakestContent').innerHTML = marked.parse(data.weakest_link);
+      document.getElementById('weakestContent').innerHTML = renderText(data.weakest_link);
     }
 
     if (data.history && data.history.length > 0) {
@@ -934,8 +1030,9 @@ async function translateResults() {
     if (statusEl) statusEl.textContent = 'Translation complete.';
   } catch (e) {
     console.error(e);
-    if (statusEl) statusEl.textContent = 'Translation failed. Please try again.';
-    alert('Translation failed.');
+    var msg = String(e && e.message ? e.message : e);
+    if (statusEl) statusEl.textContent = msg;
+    alert(msg);
   } finally {
     if (btn) { btn.disabled = false; btn.textContent = 'Translate'; }
   }
@@ -945,7 +1042,9 @@ function resetDemo() {
   document.getElementById('selectSection').style.display = 'block';
   document.getElementById('results').classList.remove('active');
   document.getElementById('ctaSection').classList.remove('visible');
-  document.getElementById('singularityBlock').classList.remove('visible');
+  var sBlock = document.getElementById('singularityBlock');
+  sBlock.classList.remove('visible');
+  sBlock.classList.remove('is-singularity');
   document.getElementById('tryAgain').classList.remove('visible');
   var rh = document.getElementById('roundHistory');
   if (rh) { rh.innerHTML = ''; rh.style.display = 'none'; }
@@ -953,8 +1052,12 @@ function resetDemo() {
   selectedCard = null;
   selectedScenario = null;
   currentResultData = null;
-  var nameEl = document.getElementById('agentname-sentinel');
-  if (nameEl) nameEl.textContent = 'SENTINEL';
+  // Bug#3 fix: reset all 4 agent names
+  var defaultNames = { sentinel: 'SENTINEL', ethikos: 'ETHIKOS', auditor: 'AUDITOR', herald: 'HERALD' };
+  Object.keys(defaultNames).forEach(function(id) {
+    var el = document.getElementById('agentname-' + id);
+    if (el) el.textContent = defaultNames[id];
+  });
   var runBtn = document.getElementById('runBtn');
   if (runBtn) { runBtn.disabled = true; runBtn.textContent = 'Initialize 4CM'; }
 }
@@ -1066,7 +1169,7 @@ function resetDemo() {
     <div class="agent-block" id="block-ethikos">
       <div class="agent-header">
         <div class="agent-indicator" style="background:var(--ethikos)"></div>
-        <span class="agent-name" style="color:var(--ethikos)">ETHIKOS</span>
+        <span class="agent-name" id="agentname-ethikos" style="color:var(--ethikos)">ETHIKOS</span>
         <span class="agent-role">Ethics & Morality</span>
         <span class="agent-status" id="status-ethikos" style="color:var(--ethikos)"><span class="pulse"></span> analyzing</span>
       </div>
@@ -1076,7 +1179,7 @@ function resetDemo() {
     <div class="agent-block" id="block-auditor">
       <div class="agent-header">
         <div class="agent-indicator" style="background:var(--auditor)"></div>
-        <span class="agent-name" style="color:var(--auditor)">AUDITOR</span>
+        <span class="agent-name" id="agentname-auditor" style="color:var(--auditor)">AUDITOR</span>
         <span class="agent-role">Accountability & Audit</span>
         <span class="agent-status" id="status-auditor" style="color:var(--auditor)"><span class="pulse"></span> analyzing</span>
       </div>
@@ -1086,7 +1189,7 @@ function resetDemo() {
     <div class="agent-block" id="block-herald">
       <div class="agent-header">
         <div class="agent-indicator" style="background:var(--herald)"></div>
-        <span class="agent-name" style="color:var(--herald)">HERALD</span>
+        <span class="agent-name" id="agentname-herald" style="color:var(--herald)">HERALD</span>
         <span class="agent-role">Transparency & Public</span>
         <span class="agent-status" id="status-herald" style="color:var(--herald)"><span class="pulse"></span> analyzing</span>
       </div>
