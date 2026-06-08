@@ -672,13 +672,35 @@ async function call4CM(scenarioIndex) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ scenario_index: scenarioIndex })
   });
+
   if (res.status === 429) {
     var err = new Error('DAILY_LIMIT');
     err.isLimit = true;
     throw err;
   }
-  if (!res.ok) throw new Error('Lambda error: ' + res.status);
-  return await res.json();
+
+  var text = await res.text();
+
+  if (!res.ok) {
+    throw new Error('Lambda error: ' + res.status + ' / ' + text);
+  }
+
+  var data = JSON.parse(text);
+
+  // Lambda 콘솔 테스트 형태처럼 statusCode/body wrapper가 오면 body를 다시 파싱
+  if (data && data.body && typeof data.body === 'string') {
+    data = JSON.parse(data.body);
+  }
+
+  if (data.error) {
+    throw new Error(data.error);
+  }
+
+  if (!data.responses) {
+    throw new Error('Invalid Lambda response: responses field missing / ' + JSON.stringify(data).slice(0, 500));
+  }
+
+  return data;
 }
 
 async function runDemo() {
