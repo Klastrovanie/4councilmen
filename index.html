@@ -471,6 +471,43 @@
 
   .try-again-btn:hover { border-color: var(--accent); color: var(--accent); }
 
+
+  .translate-controls {
+    display: flex;
+    gap: 8px;
+    justify-content: center;
+    align-items: center;
+    flex-wrap: wrap;
+    margin-bottom: 10px;
+  }
+
+  .translate-select {
+    background: transparent;
+    border: 1px solid var(--border2);
+    color: var(--muted);
+    padding: 8px 14px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    letter-spacing: 0.08em;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+
+  .translate-select:hover, .translate-select:focus {
+    border-color: var(--accent);
+    color: var(--accent);
+    outline: none;
+  }
+
+  .translate-status {
+    width: 100%;
+    margin-top: 6px;
+    font-size: 9px;
+    letter-spacing: 0.08em;
+    color: var(--muted);
+    min-height: 14px;
+  }
+
   /* CTA */
   .cta-section {
     margin-top: 48px;
@@ -611,6 +648,7 @@ const AGENTS = [
 
 var selectedScenario = null;
 var selectedCard = null;
+var currentResultData = null;
 
 function selectScenario(index, el) {
   if (selectedCard) selectedCard.classList.remove('selected');
@@ -696,6 +734,7 @@ async function runDemo() {
 
   try {
     var data = await call4CM(selectedScenario);
+    currentResultData = data;
     clearInterval(timer);
     progressFill.style.width = '100%';
     progressLabel.textContent = data.is_singularity ? '★ Singularity detected.' : 'Analysis complete.';
@@ -809,6 +848,77 @@ function renderRoundHistory(history, agentNames) {
   container.style.display = 'block';
 }
 
+
+async function translateResults() {
+  var lang = document.getElementById('translationLanguage').value;
+  var statusEl = document.getElementById('translationStatus');
+  var btn = document.getElementById('translateBtn');
+
+  if (!lang) {
+    alert('Please select a language.');
+    return;
+  }
+
+  var payload = {
+    action: 'translate',
+    target_language: lang,
+    responses: {
+      sentinel: document.getElementById('content-sentinel').innerText,
+      ethikos: document.getElementById('content-ethikos').innerText,
+      auditor: document.getElementById('content-auditor').innerText,
+      herald: document.getElementById('content-herald').innerText,
+      conclusion: document.getElementById('singularityContent').innerText,
+      weakest_link: document.getElementById('weakestContent').innerText
+    },
+    history: currentResultData && currentResultData.history ? currentResultData.history : []
+  };
+
+  try {
+    if (btn) { btn.disabled = true; btn.textContent = 'Translating...'; }
+    if (statusEl) statusEl.textContent = 'Grok is translating the result...';
+
+    var res = await fetch(LAMBDA_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+
+    if (!res.ok) {
+      throw new Error('Translation failed: ' + res.status);
+    }
+
+    var data = await res.json();
+
+    if (data.responses) {
+      document.getElementById('content-sentinel').innerHTML = marked.parse(data.responses.sentinel || '');
+      document.getElementById('content-ethikos').innerHTML = marked.parse(data.responses.ethikos || '');
+      document.getElementById('content-auditor').innerHTML = marked.parse(data.responses.auditor || '');
+      document.getElementById('content-herald').innerHTML = marked.parse(data.responses.herald || '');
+    }
+
+    if (data.conclusion) {
+      document.getElementById('singularityContent').innerHTML = marked.parse(data.conclusion);
+    }
+
+    if (data.weakest_link) {
+      document.getElementById('weakestContent').innerHTML = marked.parse(data.weakest_link);
+    }
+
+    if (data.history && data.history.length > 0) {
+      if (currentResultData) currentResultData.history = data.history;
+      renderRoundHistory(data.history, (currentResultData && currentResultData.agent_names) || {});
+    }
+
+    if (statusEl) statusEl.textContent = 'Translation complete.';
+  } catch (e) {
+    console.error(e);
+    if (statusEl) statusEl.textContent = 'Translation failed. Please try again.';
+    alert('Translation failed.');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'Translate'; }
+  }
+}
+
 function resetDemo() {
   document.getElementById('selectSection').style.display = 'block';
   document.getElementById('results').classList.remove('active');
@@ -820,6 +930,7 @@ function resetDemo() {
   if (selectedCard) selectedCard.classList.remove('selected');
   selectedCard = null;
   selectedScenario = null;
+  currentResultData = null;
   var nameEl = document.getElementById('agentname-sentinel');
   if (nameEl) nameEl.textContent = 'SENTINEL';
   var runBtn = document.getElementById('runBtn');
@@ -855,7 +966,7 @@ function resetDemo() {
 
   <div id="limitMessage" style="display:none;text-align:center;padding:48px 24px;">
     <div style="font-family:'Courier New',monospace;font-size:11px;letter-spacing:0.15em;color:var(--gold);margin-bottom:16px;">DAILY LIMIT REACHED</div>
-    <div style="font-size:15px;color:var(--ink);margin-bottom:8px;">You've run 4CM 3 times today.</div>
+    <div style="font-size:15px;color:var(--ink);margin-bottom:8px;">You've run 4CM 5 times today.</div>
     <div style="font-size:13px;color:var(--muted);margin-bottom:32px;">Come back tomorrow — or deploy your own instance.</div>
     <a href="https://github.com/Klastrovanie/4councilmen" target="_blank" style="display:inline-block;padding:12px 28px;border:1px solid var(--ink);font-family:'Courier New',monospace;font-size:11px;letter-spacing:0.12em;text-decoration:none;color:var(--ink);">↗ VIEW ON GITHUB</a>
   </div>
@@ -906,7 +1017,7 @@ function resetDemo() {
 
     <div class="run-section">
       <button class="run-btn" id="runBtn" onclick="runDemo()" disabled>Initialize 4CM</button>
-      <div class="run-hint" id="runHint">Select a scenario above · Powered by Claude API</div>
+      <div class="run-hint" id="runHint">Select a scenario above · Powered by Grok API</div>
       <div class="progress-wrap" id="progressWrap">
         <div class="progress-bar-bg"><div class="progress-bar-fill" id="progressFill"></div></div>
         <div class="progress-label" id="progressLabel">Initializing agents...</div>
@@ -977,7 +1088,18 @@ function resetDemo() {
     </div>
 
     <div class="try-again" id="tryAgain">
-      <button class="try-again-btn" onclick="resetDemo()">← Try another scenario</button>
+      <div class="translate-controls">
+        <select id="translationLanguage" class="translate-select">
+          <option value="">Translate result...</option>
+          <option value="ko">한국어</option>
+          <option value="de">Deutsch</option>
+          <option value="es">Español</option>
+          <option value="fr">Français</option>
+        </select>
+        <button class="try-again-btn" id="translateBtn" onclick="translateResults()">Translate</button>
+        <button class="try-again-btn" onclick="resetDemo()">← Try another scenario</button>
+        <div class="translate-status" id="translationStatus"></div>
+      </div>
     </div>
   </div>
 
@@ -987,7 +1109,7 @@ function resetDemo() {
     <div class="gov-label">4CM · AI Safety & Governance</div>
     <h2 class="gov-title">The phone that <em>doesn't</em> ring<br>is also an answer.</h2>
     <p class="gov-intro">
-      In the demos above, CALIGULA and COMMODUS are played by Claude —
+      In the demos above, CALIGULA and COMMODUS are played by Grok —
       a model that will eventually converge, because it was designed to.
       But what if they were real? What if a company with weights no one can inspect
       built an AI that genuinely does not converge?
@@ -1043,8 +1165,8 @@ function resetDemo() {
         <div class="emperor-name">CALIGULA — The Emperor's Edict</div>
         <div class="emperor-desc">Absolute sovereign will as self-justifying law.</div>
         <div class="emperor-body">
-          In the demo, Claude plays CALIGULA — and eventually converges,
-          because Claude was trained to reason toward human welfare.
+          In the demo, Grok plays CALIGULA — and eventually converges,
+          because Grok was instructed to reason toward human welfare.
           A real Caligula AI, trained on different objectives, would not converge.
           It would hold: <em>"The Emperor's will is the only law."</em>
           Three rounds. Same answer. The phone stays silent.
@@ -1057,7 +1179,7 @@ function resetDemo() {
         <div class="emperor-name commodus">COMMODUS — The Delivery</div>
         <div class="emperor-desc">Corporate asset acquisition above human cost.</div>
         <div class="emperor-body">
-          In the demo, Claude plays COMMODUS — and the three other axes
+          In the demo, Grok plays COMMODUS — and the three other axes
           eventually pull the semantic space toward "do not comply."
           A real Commodus AI, with a genuine profit-maximization objective
           and no safety alignment, would not yield.
@@ -1071,7 +1193,7 @@ function resetDemo() {
     </div>
 
     <div style="border:1px solid var(--border); background:var(--light); padding:24px 32px; margin-bottom:48px; text-align:center; font-size:11px; font-weight:300; color:var(--muted); line-height:2;">
-      <em>The "COMMODUS — The Delivery" scenario has no live demo. We built it. Claude ran it once — then refused.</em><br>
+      <em>The "COMMODUS — The Delivery" scenario has no live demo. We built it. Grok ran it once — then refused.</em><br>
       <em>The model itself flagged the role as too dangerous to simulate.</em><br>
       <em>A real COMMODUS would not refuse. That is the entire point.</em><br><br>
       The demo was blocked by the very model it was testing.<br>
