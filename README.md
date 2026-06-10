@@ -8,7 +8,7 @@ PhD Dissertation, 2011 · Hybrid Prototype, 2026
 
 **First Public Release of 4CM:** 2026-03-09  
 **First Public Release of Prudentia Branch:** 2026-05-19  
-**Last Updated:** 2026-05-21
+**Last Updated:** 2026-06-10
 
 ---
 
