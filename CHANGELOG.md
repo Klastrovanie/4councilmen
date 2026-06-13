@@ -1,5 +1,14 @@
 # Changelog
 
+## [2.0.4] — 2026-06-13
+
+### Security: Memory-Only API Key Storage
+
+- API keys are no longer written to disk (.env file)
+- Keys entered via UI persist in memory only; cleared on container restart
+- For persistent keys, use your organization's secret manager or env_file
+- Added .env.example for deployment guidance
+
 ## [2.0.3] — 2026-06-10
 
 ### Added
