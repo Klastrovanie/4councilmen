@@ -10,12 +10,14 @@ services:
     volumes:
       - ./angry_agents:/app/angry_agents       # agent files
       - ./logs:/app/logs
-      - ./.env:/app/.env                       
+      #- ./.env:/app/.env                       
     env_file:
       - .env                                   # ANTHROPIC_API_KEY, XAI_API_KEY (fallback)
     environment:
       - ANGRY_AGENTS_PATH=/app/angry_agents
       - FOURCM_PATH=/app
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - XAI_API_KEY=${XAI_API_KEY:-}
       
       # Upload limits
       - FOURCM_MAX_FILE_BYTES=26214400

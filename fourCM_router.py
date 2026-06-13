@@ -1065,30 +1065,32 @@ def _read_env_file() -> Dict[str, str]:
 		result[key.strip()] = val.strip().strip('"').strip("'")
 	return result
 
+_SECRET_KEYS = {"ANTHROPIC_API_KEY", "XAI_API_KEY"}
 
 def _write_env_file(data: Dict[str, str]) -> None:
-	"""dict → .env 파일 저장"""
 	lines = []
 	for k, v in data.items():
+		if k in _SECRET_KEYS:
+			continue                    # ← don't write secret keys back to .env to avoid accidental leaks
 		lines.append(f"{k}={v}")
 	ENV_FILE.write_text("\n".join(lines) + "\n", encoding="utf-8")
-
 
 @router.get("/keys/status")
 async def keys_status():
 	"""
 	GET /fourCM/keys/status
-	현재 API 키 설정 여부 반환 (값은 절대 반환하지 않음)
+	return current status of API keys without revealing their values:
 	
-	옵션 2: .env에 키가 있으면 자동으로 환경변수에 로드
+	Options2: If keys are present in .env, they are automatically loaded into environment variables at startup, 
+	so we check the environment variables for status. This way, the UI can show whether keys are set without ever exposing the actual key values in logs or API responses.
 	"""
-	env_data = _read_env_file()
+	# env_data = _read_env_file()
 
-	# Load the key from .env into the environment variable if present (option 2)
-	if env_data.get("ANTHROPIC_API_KEY"):
-		os.environ["ANTHROPIC_API_KEY"] = env_data["ANTHROPIC_API_KEY"]
-	if env_data.get("XAI_API_KEY"):
-		os.environ["XAI_API_KEY"] = env_data["XAI_API_KEY"]
+	# # Load the key from .env into the environment variable if present (option 2)
+	# if env_data.get("ANTHROPIC_API_KEY"):
+	# 	os.environ["ANTHROPIC_API_KEY"] = env_data["ANTHROPIC_API_KEY"]
+	# if env_data.get("XAI_API_KEY"):
+	# 	os.environ["XAI_API_KEY"] = env_data["XAI_API_KEY"]
 
 	claude_set = bool(os.environ.get("ANTHROPIC_API_KEY", "").strip())
 	grok_set   = bool(os.environ.get("XAI_API_KEY", "").strip())
@@ -1096,7 +1098,8 @@ async def keys_status():
 	return {
 		"claude_set": claude_set,
 		"grok_set": grok_set,
-		"source": "env_file" if env_data.get("ANTHROPIC_API_KEY") else "environment",
+		"source": "memory",
+		#"source": "env_file" if env_data.get("ANTHROPIC_API_KEY") else "environment",
 	}
 
 
@@ -1107,23 +1110,27 @@ async def keys_save(req: KeySaveRequest):
 	Option 1: save the key entered in the UI to the .env file and apply it to the environment variable immediately
 	Never print the key value in logs
 	"""
-	env_data = _read_env_file()
+	#env_data = _read_env_file()
 
 	if req.claude_key.strip():
-		env_data["ANTHROPIC_API_KEY"] = req.claude_key.strip()
+		#env_data["ANTHROPIC_API_KEY"] = req.claude_key.strip()
 		os.environ["ANTHROPIC_API_KEY"] = req.claude_key.strip()
 
 	if req.grok_key.strip():
-		env_data["XAI_API_KEY"] = req.grok_key.strip()
+		#env_data["XAI_API_KEY"] = req.grok_key.strip()
 		os.environ["XAI_API_KEY"] = req.grok_key.strip()
 
-	_write_env_file(env_data)
-	logger.info("API keys saved to .env (values not logged)")
+	#_write_env_file(env_data)
+	#logger.info("API keys saved to .env (values not logged)")
+	logger.info("API keys loaded into memory (not written to disk)")
 
 	return {
 		"saved": True,
-		"claude_set": bool(env_data.get("ANTHROPIC_API_KEY")),
-		"grok_set":   bool(env_data.get("XAI_API_KEY")),
+		"storage": "memory_only",
+		"claude_set": bool(os.environ.get("ANTHROPIC_API_KEY", "").strip()),
+        "grok_set": bool(os.environ.get("XAI_API_KEY", "").strip()),
+		#"claude_set": bool(env_data.get("ANTHROPIC_API_KEY")),
+		#"grok_set":   bool(env_data.get("XAI_API_KEY")),
 	}
 
 
