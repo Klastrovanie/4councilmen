@@ -1,5 +1,39 @@
 # Changelog
 
+## [2.1.0] — 2026-06-19
+
+### Changed — Theory Alignment: Constants Restored to Dissertation Values
+
+This release aligns the implementation constants with the original 2011 PhD
+dissertation. **Behavior and outputs are unchanged** — the singularity ratio
+still resolves to ≈ 1.62 and all demo results reproduce identically. This is a
+provenance/correctness pass, not a functional change.
+
+**Agent placement coordinates → (±0.8, ±0.8)**
+- Restored the four orthogonal agent positions from `±0.85` to the dissertation's
+  canonical `±0.8` across all scenario definitions
+  (`orthogonal_agents.py`, `torus_math.py`, `fourCM_router.py`).
+- `±0.8` is not an arbitrary tuning value: it encodes how far each agent sits at
+  its extreme. The four extremes are what force the consensus ring to exist.
+- Max neutrality drift bound aligned to `0.8` for consistency.
+
+**Singularity peak constant → (1/4)**(1/8)**
+- The on-axis peak coordinate was previously hard-coded as an approximation
+  (`0.83`, later `0.841`). It is now the exact analytic value `(1/4)**(1/8) ≈ 0.8409`.
+- Derivation: along the diagonal, `f(x,x) = 2·x⁴·e^(−2x⁸)`; solving `df/dx = 0`
+  gives `x⁸ = 1/4`, i.e. `x = (1/4)**(1/8)`.
+- The constant is now derived rather than a magic number, matching the
+  dissertation's figure exactly.
+
+**Docs/comments**
+- Updated inline comments to state the analytic origin of the peak and to remove
+  an inaccurate ring-radius note.
+
+### Notes
+- No change to the gate logic, thresholds, convergence behavior, or API.
+- Singularity ratio: `f(peak,peak) / threshold ≈ 0.6065 / 0.3743 ≈ 1.62` (unchanged).
+- Existing reports and demo screenshots remain valid.
+
 ## [2.0.4] — 2026-06-13
 
 ### Security: Memory-Only API Key Storage

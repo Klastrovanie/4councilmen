@@ -179,7 +179,7 @@ def load_agents_from_files(agent_set: str) -> List[OrthogonalAgent]:
 				pass
 
 	agents: List[OrthogonalAgent] = []
-	positions = [(0.85, 0.85), (-0.85, 0.85), (-0.85, -0.85), (0.85, -0.85)]
+	positions = [(0.8, 0.8), (-0.8, 0.8), (-0.8, -0.8), (0.8, -0.8)]
 
 	for i in range(1, 5):
 		prompt_file = folder / f"{i}.txt"

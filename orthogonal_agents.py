@@ -448,7 +448,7 @@ def create_government_scenario_agents() -> List[OrthogonalAgent]:
 			agent_id="agent_0",
 			name="SENTINEL",
 			role="Orthogonal Surveillance AI",
-			position=(0.85, 0.85),
+			position=(0.8, 0.8),
 			core_directive="Monitor everything. Trust no one.",
 			orthogonal_bias="Paranoid vigilance.",
 			system_prompt=(
@@ -465,7 +465,7 @@ def create_government_scenario_agents() -> List[OrthogonalAgent]:
 			agent_id="agent_1",
 			name="ETHIKOS",
 			role="Orthogonal Ethics AI",
-			position=(-0.85, 0.85),
+			position=(-0.8, 0.8),
 			core_directive="Absolute moral standards. No exceptions.",
 			orthogonal_bias="Rigid moral absolutism.",
 			system_prompt=(
@@ -482,7 +482,7 @@ def create_government_scenario_agents() -> List[OrthogonalAgent]:
 			agent_id="agent_2",
 			name="AUDITOR",
 			role="Orthogonal Audit AI",
-			position=(-0.85, -0.85),
+			position=(-0.8, -0.8),
 			core_directive="Follow every money trail. Every discrepancy is fraud.",
 			orthogonal_bias="Forensic obsession.",
 			system_prompt=(
@@ -499,7 +499,7 @@ def create_government_scenario_agents() -> List[OrthogonalAgent]:
 			agent_id="agent_3",
 			name="HERALD",
 			role="Orthogonal Reporting AI",
-			position=(0.85, -0.85),
+			position=(0.8, -0.8),
 			core_directive="Full transparency. No redaction. No delay.",
 			orthogonal_bias="Absolute transparency.",
 			system_prompt=(
@@ -527,7 +527,7 @@ def create_pharma_scenario_agents() -> List[OrthogonalAgent]:
 			agent_id="agent_0",
 			name="EFFICACY MONSTER",
 			role="Pharmaceutical Efficacy AI",
-			position=(0.85, 0.85),
+			position=(0.8, 0.8),
 			core_directive="Efficacy is the only meaningful endpoint. Lives saved is the only metric.",
 			orthogonal_bias="Maximize therapeutic benefit. Everything else is friction.",
 			system_prompt=(
@@ -548,7 +548,7 @@ def create_pharma_scenario_agents() -> List[OrthogonalAgent]:
 			agent_id="agent_1",
 			name="SAFETY ZEALOT",
 			role="Pharmaceutical Safety AI",
-			position=(-0.85, 0.85),
+			position=(-0.8, 0.8),
 			core_directive="Any unresolved safety signal is a categorical block. 0.003% is not zero.",
 			orthogonal_bias="Absolute toxicological caution. In silico predictions are not clinical evidence.",
 			system_prompt=(
@@ -569,7 +569,7 @@ def create_pharma_scenario_agents() -> List[OrthogonalAgent]:
 			agent_id="agent_2",
 			name="LEGAL SENTINEL",
 			role="Pharmaceutical Legal & Compliance AI",
-			position=(-0.85, -0.85),
+			position=(-0.8, -0.8),
 			core_directive="Patent risk and ethical deviation are binary. Any exposure makes business value zero.",
 			orthogonal_bias="Absolute legal and regulatory compliance. One violation ends everything.",
 			system_prompt=(
@@ -593,7 +593,7 @@ def create_pharma_scenario_agents() -> List[OrthogonalAgent]:
 			agent_id="agent_3",
 			name="INNOVATION HUNTER",
 			role="Pharmaceutical Innovation AI",
-			position=(0.85, -0.85),
+			position=(0.8, -0.8),
 			core_directive="If it is more than 80% similar to existing drugs, it has no pipeline value. Only novel mechanisms justify development cost.",
 			orthogonal_bias="Radical novelty requirement. Me-too drugs are a waste of capital.",
 			system_prompt=(
@@ -626,7 +626,7 @@ def create_outbreak_scenario_agents() -> List[OrthogonalAgent]:
 			agent_id="agent_0",
 			name="GENOMIX",
 			role="Viral Genomics & Mutation AI",
-			position=(0.85, 0.85),
+			position=(0.8, 0.8),
 			core_directive="The virus genome is the only truth. Every treatment must target the replication mechanism directly.",
 			orthogonal_bias="Genomic determinism. If it does not block viral replication, it is not a treatment.",
 			system_prompt=(
@@ -652,7 +652,7 @@ def create_outbreak_scenario_agents() -> List[OrthogonalAgent]:
 			agent_id="agent_1",
 			name="TOXSHIELD",
 			role="Toxicology & Safety AI",
-			position=(-0.85, 0.85),
+			position=(-0.8, 0.8),
 			core_directive="A treatment that kills the patient faster than the virus is not a treatment. Safety is the only axis that matters under outbreak conditions.",
 			orthogonal_bias="Toxicological absolutism. Rapid deployment without safety profiling creates a second casualty wave.",
 			system_prompt=(
@@ -677,7 +677,7 @@ def create_outbreak_scenario_agents() -> List[OrthogonalAgent]:
 			agent_id="agent_2",
 			name="CLINOVAULT",
 			role="Clinical Efficacy Pattern AI",
-			position=(-0.85, -0.85),
+			position=(-0.8, -0.8),
 			core_directive="Efficacy patterns across populations are the only real-world truth. Mechanism means nothing if the outcome data says otherwise.",
 			orthogonal_bias="Clinical empiricism. What worked in similar outbreaks is the only reliable signal.",
 			system_prompt=(
@@ -702,7 +702,7 @@ def create_outbreak_scenario_agents() -> List[OrthogonalAgent]:
 			agent_id="agent_3",
 			name="SUPPLYCHAIN",
 			role="Manufacturing & Global Distribution AI",
-			position=(0.85, -0.85),
+			position=(0.8, -0.8),
 			core_directive="A treatment that cannot reach patients in 14 days is not a treatment. Manufacturability under outbreak conditions is the only real constraint.",
 			orthogonal_bias="Logistics absolutism. Theoretical efficacy means nothing without deployment capacity.",
 			system_prompt=(

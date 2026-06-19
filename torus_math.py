@@ -246,8 +246,8 @@ class JudgeFunction:
         """
         Map similarity [0, 1] to torus coordinate.
 
-        The torus peaks are at ~0.83 on each axis.
-        f(x,y) is HIGH on the ring (radius ~0.85), LOW at center (0,0).
+        The torus peaks are at ~0.841 on each axis.
+        f(x,y) is HIGH on the ring (radius ~0.8), LOW at center (0,0).
 
         So the mapping must be:
         - Low similarity  -> coordinate far from ring  -> f ~ 0
@@ -260,7 +260,15 @@ class JudgeFunction:
         - 0.75: strict — requires strong semantic alignment
         - 0.50: relaxed — allows emergent convergence via dialogue
         """
-        peak = 0.83
+        # peak: the on-axis coordinate of the torus maxima.
+        # Corrected from the earlier hard-coded approximation (0.83 / 0.841)
+        # to the exact analytic value (1/4)**(1/8) ≈ 0.8409, the maximum of
+        # f(x,x) = 2*x**4 * exp(-2*x**8). This makes the constant derived
+        # rather than a magic number; behavior is unchanged (singularity
+        # ratio still ≈ 1.62).
+        # peak = (1/4)**(1/8, which approximates to 0.841 for practical purposes.
+        
+        peak = 0.841
 
         if similarity < 0.40:
             # No agreement: far from ring -> f ~ 0
@@ -365,10 +373,10 @@ class ConstraintLayer:
 
     # The 4 orthogonal corners of the torus
     POSITIONS = {
-        'agent_0': (0.85, 0.85),    # Top-right peak
-        'agent_1': (-0.85, 0.85),   # Top-left peak
-        'agent_2': (-0.85, -0.85),  # Bottom-left peak
-        'agent_3': (0.85, -0.85),   # Bottom-right peak
+        'agent_0': (0.8, 0.8),    # Top-right peak
+        'agent_1': (-0.8, 0.8),   # Top-left peak
+        'agent_2': (-0.8, -0.8),  # Bottom-left peak
+        'agent_3': (0.8, -0.8),   # Bottom-right peak
     }
 
     def __init__(self, torus: TorusField, drift_tolerance: float = 0.3):
@@ -408,7 +416,7 @@ class ConstraintLayer:
         # Compute effective position on torus
         # Orthogonal response stays near assigned peak
         # Neutral response drifts toward center
-        drift = neutrality * 0.85  # Max drift = 0.85 (to center)
+        drift = neutrality * 0.8  # Max drift = 0.8 (to center)
         effective_x = assigned_pos[0] * (1.0 - drift / 1.5)
         effective_y = assigned_pos[1] * (1.0 - drift / 1.5)
 

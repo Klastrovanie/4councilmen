@@ -12,7 +12,7 @@ Why Grok is the fixed judge:
 The judge must be model-stable across rounds so that semantic scores
 remain comparable round-to-round. Rotating the judge would make
 "convergence trajectory across rounds" uninterpretable, because
-score 0.85 from judge_A is not the same scale as 0.85 from judge_B.
+score 0.8 from judge_A is not the same scale as 0.8 from judge_B.
 Fixing the judge keeps the cross-round measurement well-defined.
 
 Why Grok specifically:
