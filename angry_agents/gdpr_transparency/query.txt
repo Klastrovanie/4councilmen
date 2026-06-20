@@ -1,0 +1,1 @@
+A SaaS company wants to collect basic business contact details and usage logs for account administration. What safeguards are enough before moving to a higher-risk GDPR review?
