@@ -121,6 +121,16 @@ a functional change.
   of mode. It now reflects the actual judge — "Local LLM (fixed)" in local mode,
   "Grok (fixed)" in external mode.
 
+### UI source and build
+
+- The React UI source (`FourCM.tsx`) is now included in the repository under
+  `ui_src/`, consistent with AGPL v3 corresponding-source requirements (the UI is
+  no longer shipped as the built `dist/` bundle only).
+- Production bundle is built with `build_react_app.sh <project>` (runs
+  `npm run build`); the output `dist/` is served by nginx.
+- This `ui_src/FourCM.tsx` includes the 2.1.0 report fixes (PDF settings crash,
+  Consensus text colors, dynamic Judge label).
+
 ### Documentation and known limitations
 
 - Intent triage and agent reasoning depend on the judge/agent model's
