@@ -32,7 +32,7 @@ logger = logging.getLogger(__name__)
 app = FastAPI(
     title="4 Councilmen Model API",
     description="Hybrid multi-agent convergence engine — Claude + Grok",
-    version="2.0.0",
+    version="2.1.0",
     docs_url="/docs",
     redoc_url="/redoc",
 )
@@ -59,7 +59,7 @@ app.include_router(fourCM_router)
 def health():
     return {
         "status": "ok",
-        "version": "2.0.0",
+        "version": "2.1.0",
         "engine": "4CM Hybrid",
     }
 
@@ -67,7 +67,7 @@ def health():
 @app.on_event("startup")
 async def startup():
     logger.info("=" * 60)
-    logger.info("  4CM API v2.0 starting")
+    logger.info("  4CM API v2.1.0 starting")
     logger.info(f"  ANGRY_AGENTS_PATH : {os.environ.get('ANGRY_AGENTS_PATH', './angry_agents')}")
     logger.info(f"  ANTHROPIC_API_KEY : {'set' if os.environ.get('ANTHROPIC_API_KEY') else 'not set (use X-Claude-Key header)'}")
     ensure_upload_root()

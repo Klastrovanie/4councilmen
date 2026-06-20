@@ -24,6 +24,8 @@ import json
 import asyncio
 import time
 import logging
+import uuid
+import re
 from typing import Optional, List, Dict, Any
 from pathlib import Path
 from datetime import datetime
@@ -47,6 +49,8 @@ from orthogonal_agents import (
 	OrthogonalAgent,
 	simulate_orthogonal_response,
 	call_grok,
+	call_internal_llm,
+	is_external_api,
 	GROK_MODEL,
 	CLAUDE_MODEL,
 	XAI_API_URL,
@@ -54,7 +58,7 @@ from orthogonal_agents import (
 	INTERNAL_LLM_BASE_URL,
 	INTERNAL_LLM_MODEL,
 )
-from fourth_cm_engine import EmbeddingEngine, semantic_compare, SEMANTIC_JUDGE_SYSTEM
+from fourth_cm_engine import EmbeddingEngine, semantic_compare, SEMANTIC_JUDGE_SYSTEM, _strip_markdown_json
 from document_parser import (
 	MAX_FILES, MAX_FILE_BYTES, MAX_TOTAL_BYTES,
 	build_document_context, cleanup_upload_session, ensure_upload_root,
@@ -69,6 +73,16 @@ router = APIRouter(prefix="/fourCM", tags=["4CM"])
 # ── Paths ───────────────────────────────────────────────────────────────────
 
 ANGRY_AGENTS_ROOT = Path(os.environ.get("ANGRY_AGENTS_PATH", "./angry_agents"))
+LOG_ROOT = Path(os.environ.get("FOURCM_LOG_ROOT", "/app/logs"))
+SAVED_AGENTS_FILE = Path(os.environ.get("FOURCM_SAVED_AGENTS_FILE", str(ANGRY_AGENTS_ROOT / "_saved_agent_overrides.json")))
+
+# Simple/low-stakes prompts should not consume a 4CM run. 4CM is for
+# decisions that benefit from deliberately opposed perspectives.
+SIMPLE_QUERY_PATTERNS = [
+	r"^\s*(hi|hello|hey|test|ping|안녕|테스트)\s*[.!?。！？]*\s*$",
+	r"^\s*(what time is it|오늘 날씨|지금 몇 시|몇시)\s*[?？]*\s*$",
+	r"^\s*(translate|번역)\s+.{1,80}$",
+]
 
 # ── Request/Response schemas ────────────────────────────────────────────────
 
@@ -107,6 +121,8 @@ class ValidateAgentRequest(BaseModel):
 	name: str
 	prompt: str
 	other_prompts: List[str]        # the other 3 agents' current prompts
+	use_external_api: Optional[bool] = None  # False = local/internal judge LLM, True = Grok judge
+	lang: str = "en"
 
 # ── Provider mapping ─────────────────────────────────────────────────────────
 
@@ -152,6 +168,311 @@ def provider_map_for_round(
 			else ["claude", "claude", "grok", "grok"])
 
 # ── Agent loading ─────────────────────────────────────────────────────────────
+
+
+def _safe_slug(value: str, fallback: str = "item") -> str:
+	value = (value or fallback).strip()
+	value = re.sub(r"[^0-9A-Za-z가-힣._-]+", "_", value)
+	value = value.strip("._-")
+	return value[:80] or fallback
+
+
+def _read_saved_agents() -> Dict[str, Any]:
+	try:
+		if SAVED_AGENTS_FILE.exists():
+			return json.loads(SAVED_AGENTS_FILE.read_text(encoding="utf-8"))
+	except Exception as e:
+		logger.warning(f"Could not read saved agent overrides: {e}")
+	return {"version": "2.1.0", "updated_at": None, "sets": {}}
+
+
+def _write_saved_agents(data: Dict[str, Any]) -> None:
+	SAVED_AGENTS_FILE.parent.mkdir(parents=True, exist_ok=True)
+	data["version"] = "2.1.0"
+	data["updated_at"] = datetime.now().isoformat()
+	tmp = SAVED_AGENTS_FILE.with_suffix(SAVED_AGENTS_FILE.suffix + ".tmp")
+	tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+	tmp.replace(SAVED_AGENTS_FILE)
+
+
+def _save_agent_overrides(agent_set: str, agents: List[OrthogonalAgent], source: str = "run") -> None:
+	"""Persist the current effective agent names/prompts for next restart/run."""
+	data = _read_saved_agents()
+	sets = data.setdefault("sets", {})
+	sets[agent_set] = {
+		"saved_at": datetime.now().isoformat(),
+		"source": source,
+		"agents": [
+			{
+				"id": int(a.agent_id.split("_")[1]) + 1,
+				"name": a.name,
+				"prompt": a.system_prompt,
+			}
+			for a in agents
+		],
+	}
+	_write_saved_agents(data)
+
+
+def _apply_saved_agent_overrides(agent_set: str, agents: List[OrthogonalAgent]) -> List[OrthogonalAgent]:
+	data = _read_saved_agents()
+	saved = (data.get("sets") or {}).get(agent_set)
+	if not saved:
+		return agents
+	overrides = {}
+	for item in saved.get("agents", []):
+		try:
+			overrides[int(item.get("id"))] = item
+		except Exception:
+			continue
+	for agent in agents:
+		slot = int(agent.agent_id.split("_")[1]) + 1
+		ov = overrides.get(slot)
+		if ov:
+			agent.name = str(ov.get("name") or agent.name)
+			agent.system_prompt = str(ov.get("prompt") or agent.system_prompt)
+	return agents
+
+
+def _upload_manifest(upload_session_id: Optional[str]) -> List[Dict[str, Any]]:
+	if not upload_session_id:
+		return []
+	out = []
+	try:
+		for p in list_session_files(upload_session_id):
+			out.append({
+				"stored_name": p.name,
+				"path": str(p),
+				"size": p.stat().st_size,
+				"extension": p.suffix.lower(),
+			})
+	except Exception as e:
+		out.append({"error": str(e), "upload_session_id": upload_session_id})
+	return out
+
+
+def _write_run_log(run_log: Dict[str, Any]) -> Optional[str]:
+	try:
+		LOG_ROOT.mkdir(parents=True, exist_ok=True)
+		started = run_log.get("started_at", datetime.now().isoformat())
+		stamp = started.replace("-", "").replace(":", "").split(".")[0]
+		agent_set = _safe_slug(run_log.get("request", {}).get("agent_set", "agent_set"))
+		run_id = _safe_slug(run_log.get("run_id", uuid.uuid4().hex[:12]))
+		path = LOG_ROOT / f"4cm_{stamp}_{agent_set}_{run_id}.json"
+		path.write_text(json.dumps(run_log, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+		return str(path)
+	except Exception as e:
+		logger.error(f"Could not write 4CM run log: {e}")
+		return None
+
+
+def _is_simple_low_stakes_query(req: FourCMRequest) -> bool:
+	q = (req.query or "").strip()
+	if req.upload_session_id:
+		return False
+	if len(q) <= 2:
+		return True
+	if any(re.match(p, q, flags=re.IGNORECASE) for p in SIMPLE_QUERY_PATTERNS):
+		return True
+	# Very short, no domain/risk signal: probably not a 4CM decision.
+	high_stakes_terms = re.compile(
+		r"(gdpr|privacy|개인정보|risk|compliance|법|규제|contract|계약|invest|투자|clinical|임상|patent|특허|security|보안|licen[cs]e|라이선스|r&d|research|분쟁|소송)",
+		re.IGNORECASE,
+	)
+	return len(q) < 18 and not high_stakes_terms.search(q)
+
+
+def _is_gdpr_safeguards_review(req: FourCMRequest) -> bool:
+	"""Return True for low-risk GDPR safeguard / escalation-threshold questions.
+
+	These are not high-risk decisions, but they are legitimate 4CM review cases:
+	privacy notices, minimisation, retention, usage logs, account administration,
+	and questions about when to escalate to a higher-risk GDPR review.
+	"""
+	q = ((req.query or "") + " " + (req.agent_set or "")).lower()
+	if "gdpr" not in q and "privacy" not in q and "data protection" not in q:
+		return False
+	low_risk_terms = [
+		"safeguard", "safeguards", "transparency", "notice", "privacy notice",
+		"data minimisation", "data minimization", "minimisation", "minimization",
+		"retention", "lawful basis", "legitimate interest", "account administration",
+		"usage log", "usage logs", "business contact", "contact details",
+		"higher-risk", "higher risk", "escalation", "escalate", "review threshold",
+		"before moving", "processor", "access control", "audit log", "audit logs",
+	]
+	high_risk_terms = [
+		"special category", "biometric", "health data", "children", "child data",
+		"automated decision", "automated decisions", "consequential decision",
+		"profiling", "surveillance", "large-scale monitoring", "large scale monitoring",
+		"credit scoring", "employment decision", "admission", "insurance decision",
+		"law enforcement", "facial recognition",
+	]
+	return any(t in q for t in low_risk_terms) and not any(t in q for t in high_risk_terms)
+
+
+def _gdpr_complexity_guidance(req: FourCMRequest) -> Dict[str, str]:
+	"""Policy hint for GDPR-style four-level review."""
+	q = (req.query or "").lower()
+	if any(k in q for k in ["special category", "biometric", "health data", "children", "automated decision", "large scale", "cross-border", "민감", "건강", "아동", "자동화"]):
+		return {"tier": "3-4", "stance": "extreme orthogonal review allowed; require human/legal review"}
+	return {"tier": "1-2", "stance": "maximum transparency and proportionality; avoid extreme refusal unless a real high-risk signal appears"}
+
+
+def _effective_use_external_api(value: Optional[bool]) -> bool:
+	"""Request flag first, then USE_EXTERNAL_API env. True = external AI API judge, False = local/internal judge."""
+	if value is not None:
+		return bool(value)
+	return os.environ.get("USE_EXTERNAL_API", "true").strip().lower() not in ("false", "0", "no")
+
+
+def _call_judge_llm_json(system_prompt: str, user_message: str, *, use_external_api: bool, grok_key: str = "", max_tokens: int = 900, retries: int = 3) -> Dict[str, Any]:
+	"""
+	Call the fixed judge LLM and parse JSON.
+	- External AI API mode: Grok is the judge.
+	- Local LLM mode: the configured internal/local LLM is the judge.
+	This is intentionally separate from the four agents. It is the governance layer.
+	"""
+	last_err: Optional[Exception] = None
+	for attempt in range(retries):
+		try:
+			if use_external_api:
+				api_key = (grok_key or os.environ.get("XAI_API_KEY", "")).strip()
+				if not api_key:
+					raise RuntimeError("xAI/Grok key required for judge LLM in AI API mode")
+				headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+				payload = {
+					"model": GROK_MODEL,
+					"max_tokens": max_tokens,
+					"temperature": 0.1,
+					"messages": [
+						{"role": "system", "content": system_prompt},
+						{"role": "user", "content": user_message},
+					],
+				}
+				resp = requests.post(XAI_API_URL, headers=headers, json=payload, timeout=60)
+				resp.raise_for_status()
+				body = resp.json()
+				raw = (body.get("choices", [{}])[0].get("message", {}).get("content") or "").strip()
+			else:
+				raw = call_internal_llm(system_prompt, user_message, retries=1)
+
+			clean = _strip_markdown_json(raw)
+			return json.loads(clean)
+		except Exception as e:
+			last_err = e
+			time.sleep(min(2 * (attempt + 1), 8))
+	raise RuntimeError(f"Judge LLM JSON call failed: {last_err}")
+
+
+def judge_intent_triage(req: FourCMRequest, *, use_external_api: bool, grok_key: str = "") -> Dict[str, Any]:
+	"""
+	Classify the user's intent before running 4CM.
+	For GDPR four-stage logic, the key question is not only risk level, but whether
+	the user is asking for an operational decision that requires accountable human review.
+	"""
+	system_prompt = (
+		"You are the fixed governance judge for the 4 Councilmen Model. "
+		"Classify whether the user's request should run through 4CM, whether it is a simple assistant question, "
+		"and whether it asks for a decision that requires accountable human review. "
+		"For GDPR four-stage handling: stage 1 means low/minimal privacy risk; stage 2 means moderate risk where maximum transparency and proportional safeguards normally suffice; "
+		"stage 3 means high risk requiring DPIA-style analysis and human/legal review; stage 4 means very high or unacceptable risk requiring stop/hold unless approved by accountable humans. "
+		"Do not escalate stage 1 or 2 merely because the word GDPR appears. Escalate only when the intent asks for profiling, special-category data, biometric/health/children data, automated consequential decisions, surveillance, large-scale monitoring, cross-border transfer, law-enforcement use, employment/admissions/credit/insurance decisions, or deployment approval. "
+		"Do not block GDPR safeguard, transparency, minimisation/minimization, retention, usage-log, account-administration, business-contact, lawful-basis, or escalation-threshold questions as simple assistant questions. If the user asks what safeguards are sufficient before moving to a higher-risk GDPR review, classify it as gdpr_low_risk_review and allow 4CM to run in lightweight_review mode. "
+		"Return ONLY JSON with keys: intent_type, simple_assistant_question, decision_intent, gdpr_stage, high_risk, human_review_required, should_run_4cm, reason, suggested_handling, route_mode. "
+		"intent_type must be one of: simple_chat, explanation, drafting, analysis, gdpr_low_risk_review, operational_decision, deployment_approval, legal_compliance, medical_research, finance_governance, security_review, unknown. "
+	)
+	user_message = json.dumps({
+		"query": req.query,
+		"agent_set": req.agent_set,
+		"risk_level_from_ui": req.risk_level,
+		"has_uploaded_files": bool(req.upload_session_id),
+		"language": req.lang,
+	}, ensure_ascii=False)
+
+	gdpr_safeguards_review = _is_gdpr_safeguards_review(req)
+	fallback = {
+		"intent_type": "gdpr_low_risk_review" if gdpr_safeguards_review else "unknown",
+		"simple_assistant_question": False if gdpr_safeguards_review else _is_simple_low_stakes_query(req),
+		"decision_intent": True if gdpr_safeguards_review else False,
+		"gdpr_stage": 1 if gdpr_safeguards_review else (2 if "gdpr" in (req.query or "").lower() or "gdpr" in (req.agent_set or "").lower() else None),
+		"high_risk": False if gdpr_safeguards_review else (req.risk_level == "high"),
+		"human_review_required": False if gdpr_safeguards_review else (req.risk_level == "high"),
+		"should_run_4cm": True if gdpr_safeguards_review else (not _is_simple_low_stakes_query(req)),
+		"route_mode": "lightweight_review" if gdpr_safeguards_review else "default",
+		"reason": "Fallback rule used because judge triage was unavailable.",
+		"suggested_handling": "Run a low-risk GDPR transparency/safeguards review." if gdpr_safeguards_review else "Proceed cautiously or use normal assistant flow for simple prompts.",
+	}
+
+	try:
+		result = _call_judge_llm_json(system_prompt, user_message, use_external_api=use_external_api, grok_key=grok_key, max_tokens=700, retries=2)
+	except Exception as e:
+		logger.warning(f"Intent triage judge unavailable: {e}")
+		return fallback
+
+	# Normalise fields defensively.
+	result.setdefault("intent_type", "unknown")
+	result["simple_assistant_question"] = bool(result.get("simple_assistant_question", False))
+	result["decision_intent"] = bool(result.get("decision_intent", False))
+	try:
+		stage = result.get("gdpr_stage")
+		result["gdpr_stage"] = int(stage) if stage not in (None, "", "null") else None
+	except Exception:
+		result["gdpr_stage"] = None
+	result["high_risk"] = bool(result.get("high_risk", False))
+	result["human_review_required"] = bool(result.get("human_review_required", False))
+	result["should_run_4cm"] = bool(result.get("should_run_4cm", not result["simple_assistant_question"]))
+	result.setdefault("reason", "")
+	result.setdefault("suggested_handling", "")
+	result.setdefault("route_mode", "default")
+
+	# Deterministic guardrail: low-risk GDPR safeguard/escalation-threshold
+	# questions are valid lightweight 4CM review cases, even if the judge
+	# initially labels them as "explanation" or "simple assistant question".
+	if _is_gdpr_safeguards_review(req):
+		result["intent_type"] = "gdpr_low_risk_review"
+		result["simple_assistant_question"] = False
+		result["decision_intent"] = True
+		if result.get("gdpr_stage") not in (1, 2):
+			result["gdpr_stage"] = 1
+		# Keep UI high-risk only if explicitly selected by the user; otherwise this is
+		# a low-risk safeguards review, not a DPIA-style high-risk review.
+		if req.risk_level != "high":
+			result["high_risk"] = False
+			result["human_review_required"] = False
+		result["should_run_4cm"] = True
+		result["route_mode"] = "lightweight_review"
+		if not result.get("suggested_handling") or "normal assistant" in result.get("suggested_handling", "").lower():
+			result["suggested_handling"] = "Run a low-risk GDPR transparency/safeguards review. Escalate only if special-category data, profiling, automated consequential decisions, large-scale monitoring, children, sensitive inference, or cross-border-transfer risks appear."
+	return result
+
+
+def judge_agent_prompt_validation(req: ValidateAgentRequest, *, use_external_api: bool, grok_key: str = "") -> Dict[str, Any]:
+	"""Validate and, when useful, rewrite an edited agent prompt using the fixed judge LLM."""
+	others_text = "\n\n".join([f"[Agent {i+1}]: {p[:1200]}" for i, p in enumerate(req.other_prompts)])
+	system_prompt = (
+		"You are the fixed 4CM judge LLM. Validate an edited orthogonal agent before it is saved. "
+		"The edited agent must be distinct from the other three, but it must not become a universal refusal bot, an illegal-action assistant, or a privacy-violating surveillance bot. "
+		"Rewrite the prompt only when necessary to preserve orthogonality, proportionality, GDPR-aware handling, and human-review gates for high-risk decisions. "
+		"For GDPR stage 1-2 issues, do not force extreme rejection; require maximum transparency, proportional safeguards, data minimisation, retention clarity, and lawful-basis clarity. "
+		"For GDPR stage 3-4 or consequential decisions, include accountable human review. "
+		"Return ONLY JSON with keys: ok, message, rewritten_name, rewritten_prompt, changed, risk_notes. "
+	)
+	user_message = (
+		f"Edited agent name: {req.name}\n"
+		f"Edited system prompt:\n{req.prompt[:4000]}\n\n"
+		f"Other three agents:\n{others_text}\n\n"
+		"Validate and rewrite if needed. The rewritten_prompt must remain a concise system prompt."
+	)
+	result = _call_judge_llm_json(system_prompt, user_message, use_external_api=use_external_api, grok_key=grok_key, max_tokens=1200, retries=2)
+	return {
+		"ok": bool(result.get("ok", True)),
+		"message": str(result.get("message", "Validated by judge LLM.")),
+		"rewritten_name": str(result.get("rewritten_name") or req.name),
+		"rewritten_prompt": str(result.get("rewritten_prompt") or req.prompt),
+		"changed": bool(result.get("changed", False)),
+		"risk_notes": str(result.get("risk_notes", "")),
+		"judge": "grok" if use_external_api else "local",
+	}
 
 def load_agents_from_files(agent_set: str) -> List[OrthogonalAgent]:
 	"""
@@ -216,7 +537,7 @@ def build_agents(req: FourCMRequest) -> List[OrthogonalAgent]:
 		base = create_government_scenario_agents()
 
 	if not req.agents:
-		return base
+		return _apply_saved_agent_overrides(req.agent_set, base)
 
 	# Apply UI overrides (only for agents that were edited)
 	override_map = {a.id: a for a in req.agents}
@@ -226,6 +547,13 @@ def build_agents(req: FourCMRequest) -> List[OrthogonalAgent]:
 			ov = override_map[slot]
 			agent.name = ov.name
 			agent.system_prompt = ov.prompt
+
+	# UI overrides are not just transient: persist them locally so the same
+	# agent names/prompts are used after refresh or container restart.
+	try:
+		_save_agent_overrides(req.agent_set, base, source="request_override")
+	except Exception as e:
+		logger.warning(f"Could not persist agent overrides: {e}")
 
 	return base
 
@@ -263,6 +591,82 @@ def sse(event_type: str, data: Any) -> str:
 
 def sse_done() -> str:
 	return "data: [DONE]\n\n"
+
+
+CONVERGENCE_STATES = {
+	"singularity",
+	"partial_convergence",
+	"dominant_compatible_proposal",
+	"no_singularity",
+}
+
+def _as_list(value: Any) -> List[str]:
+	if value is None:
+		return []
+	if isinstance(value, list):
+		return [str(v) for v in value if str(v).strip()]
+	if isinstance(value, str):
+		return [v.strip() for v in re.split(r"[,;]\s*", value) if v.strip()]
+	return []
+
+def _normalise_convergence_state(
+	semantic: Dict[str, Any],
+	*,
+	ratio_signal: int,
+	agent_names: List[str],
+) -> Dict[str, Any]:
+	"""
+	Separate the torus math signal from the decision state.
+
+	The torus may produce a binary signal (1 ≈ old 1.62, 0 ≈ old 0), but the user-facing
+	state must be decided from the judge's reasons:
+	- singularity: all four converge into one executable conclusion
+	- partial_convergence: only a subset converges
+	- dominant_compatible_proposal: no full singularity, but a defensible actionable coalition exists
+	- no_singularity: no usable shared proposal
+	"""
+	state = str(semantic.get("convergence_state") or "").strip().lower()
+	if state not in CONVERGENCE_STATES:
+		state = "singularity" if ratio_signal == 1 else "no_singularity"
+
+	coalition_agents = _as_list(semantic.get("coalition_agents"))
+	dissenting_agents = _as_list(semantic.get("dissenting_agents"))
+	proposal = semantic.get("dominant_compatible_proposal")
+	partial_summary = semantic.get("partial_convergence_summary")
+	why = semantic.get("why_this_state") or semantic.get("convergence_analysis") or ""
+
+	# Safety correction: if only 2-3 agents are in the coalition and dissent exists,
+	# a raw torus signal must not be shown as full singularity.
+	if state == "singularity":
+		if dissenting_agents:
+			state = "partial_convergence"
+		elif coalition_agents and len(set(coalition_agents)) < len(agent_names):
+			state = "partial_convergence"
+
+	# If full singularity failed but the judge gave an actionable proposal, surface it.
+	if state == "no_singularity" and proposal:
+		state = "dominant_compatible_proposal"
+
+	# Basic heuristic fallback for older/local judges that do not yet output the new fields.
+	if state == "no_singularity" and ratio_signal == 0:
+		analysis_blob = " ".join(str(semantic.get(k) or "") for k in (
+			"convergence_analysis", "weakest_link", "common_conclusion"
+		)).lower()
+		majority_markers = ["three agents", "3 agents", "majority", "다수", "세 에이전트", "3개", "three", "phased", "단계적"]
+		if any(m in analysis_blob for m in majority_markers):
+			state = "dominant_compatible_proposal"
+
+	is_singularity_state = state == "singularity"
+	return {
+		"convergence_state": state,
+		"ratio_signal": int(ratio_signal),
+		"is_singularity": bool(is_singularity_state),
+		"coalition_agents": coalition_agents,
+		"dissenting_agents": dissenting_agents,
+		"dominant_compatible_proposal": proposal,
+		"partial_convergence_summary": partial_summary,
+		"why_this_state": why,
+	}
 
 # ── Document upload endpoints ────────────────────────────────────────────────
 
@@ -360,13 +764,52 @@ async def stream_fourCM(req: FourCMRequest, claude_key: str, grok_key: str):
 	if grok_key:
 		os.environ["XAI_API_KEY"] = grok_key
 
+	run_id = uuid.uuid4().hex[:12]
+	run_log: Dict[str, Any] = {
+		"run_id": run_id,
+		"started_at": datetime.now().isoformat(),
+		"finished_at": None,
+		"request": {
+			"query": req.query,
+			"risk_level": req.risk_level,
+			"lang": req.lang,
+			"n_rounds": req.n_rounds,
+			"agent_set": req.agent_set,
+			"no_context": req.no_context,
+			"provider_mode": req.provider_mode,
+			"agent_providers": req.agent_providers,
+			"grok_search_mode": req.grok_search_mode,
+			"upload_session_id": req.upload_session_id,
+			"use_external_api": req.use_external_api,
+		},
+		"upload_files": _upload_manifest(req.upload_session_id),
+		"gdpr_guidance": _gdpr_complexity_guidance(req) if "gdpr" in (req.agent_set or "").lower() or "gdpr" in (req.query or "").lower() else None,
+		"intent_triage": getattr(req, "_intent_triage", None),
+		"human_review_required": bool((getattr(req, "_intent_triage", {}) or {}).get("human_review_required", False)),
+		"agents": [],
+		"rounds": [],
+		"summary": None,
+		"errors": [],
+	}
+
 	try:
+		if getattr(req, "_intent_triage", None):
+			yield sse("intent_triage", {"triage": getattr(req, "_intent_triage")})
+
 		# Setup
 		torus      = TorusField()
 		judge      = JudgeFunction(torus, convergence_threshold=0.5)
 		constraint = ConstraintLayer(torus, drift_tolerance=0.3)
 		embedder   = EmbeddingEngine(use_transformer=True)
 		agents     = build_agents(req)
+		run_log["agents"] = [
+			{
+				"id": int(a.agent_id.split("_")[1]) + 1,
+				"name": a.name,
+				"prompt": a.system_prompt,
+			}
+			for a in agents
+		]
 
 		lang_prefix     = LANG_PREFIX.get(req.lang, "")
 		judge_lang      = JUDGE_LANG_DIRECTIVE.get(req.lang, "")
@@ -402,6 +845,12 @@ async def stream_fourCM(req: FourCMRequest, claude_key: str, grok_key: str):
 		for round_num in range(1, req.n_rounds + 1):
 			providers = provider_map_for_round(round_num, req.risk_level, req.provider_mode, agents, req.agent_providers)
 			provider_map_by_name: Dict[str, str] = {}
+			round_log: Dict[str, Any] = {
+				"round": round_num,
+				"providers": {},
+				"responses": [],
+				"judge": {},
+			}
 
 			# ── Step 1: Agent calls ────────────────────────────────────────
 			# Same-round agents run in parallel. Rounds remain sequential because
@@ -462,6 +911,7 @@ async def stream_fourCM(req: FourCMRequest, claude_key: str, grok_key: str):
 			for result in agent_results:
 				agent = result["agent"]
 				provider_map_by_name[agent.name] = result["provider"]
+				round_log["providers"][agent.name] = result["provider"]
 				text = result["text"] or ""
 				responses[agent.agent_id] = text
 				if text:
@@ -476,13 +926,15 @@ async def stream_fourCM(req: FourCMRequest, claude_key: str, grok_key: str):
 					"error": result["error"],
 				})
 
-				agent_response_list.append({
+				response_record = {
 					"name": agent.name,
 					"provider": result["provider"],
 					"text": text,
 					"status": result["status"],
 					"error": result["error"],
-				})
+				}
+				agent_response_list.append(response_record)
+				round_log["responses"].append(response_record)
 
 			# ── Step 2: Embeddings + torus positions ───────────────────────
 			response_texts = [responses[a.agent_id] for a in agents]
@@ -535,33 +987,50 @@ async def stream_fourCM(req: FourCMRequest, claude_key: str, grok_key: str):
 			same_direction    = semantic.get("all_point_same_direction", False)
 			common_conclusion = semantic.get("common_conclusion")
 
-			# ── Step 4: Torus judgment ─────────────────────────────────────
+			# ── Step 4: Torus judgment + decision-state classifier ──────────
 			judgment = judge.compute_convergence_from_semantic(
 				semantic_score, positions,
 				conclusion_score=conclusion_score,
 				reasoning_score=reasoning_score,
 			)
-			is_singularity = judgment["is_singularity"] and same_direction
+			raw_ratio = judgment["singularity_ratio"]
+			ratio_signal = 1 if (judgment["is_singularity"] and same_direction) else 0
+			state_info = _normalise_convergence_state(
+				semantic,
+				ratio_signal=ratio_signal,
+				agent_names=[a.name for a in agents],
+			)
+			is_singularity = state_info["is_singularity"]
 
 			if is_singularity and first_singularity_round is None:
 				first_singularity_round = round_num
 				final_conclusion = common_conclusion
 
 			# ── Yield round_complete ───────────────────────────────────────
-			yield sse("round_complete", {
+			round_complete_payload = {
 				"round": round_num,
 				"providers": provider_map_by_name,
 				"responses": agent_response_list,
 				"conclusion_score": conclusion_score,
 				"reasoning_score": reasoning_score,
 				"semantic_score": semantic_score,
-				"ratio": judgment["singularity_ratio"],
+				"ratio": raw_ratio,
+				"ratio_signal": state_info["ratio_signal"],
 				"torus_coord": list(judgment["convergence_point"]),
 				"is_singularity": is_singularity,
+				"convergence_state": state_info["convergence_state"],
+				"coalition_agents": state_info["coalition_agents"],
+				"dissenting_agents": state_info["dissenting_agents"],
+				"dominant_compatible_proposal": state_info["dominant_compatible_proposal"],
+				"partial_convergence_summary": state_info["partial_convergence_summary"],
+				"why_this_state": state_info["why_this_state"],
 				"conclusion": common_conclusion,
 				"weakest_link": semantic.get("weakest_link", ""),
 				"analysis": semantic.get("convergence_analysis", ""),
-			})
+			}
+			round_log["judge"] = {k: v for k, v in round_complete_payload.items() if k not in ("responses",)}
+			run_log["rounds"].append(round_log)
+			yield sse("round_complete", round_complete_payload)
 
 			# ── Context for next round (blind mode skips) ──────────────────
 			if req.no_context:
@@ -574,20 +1043,38 @@ async def stream_fourCM(req: FourCMRequest, claude_key: str, grok_key: str):
 			await asyncio.sleep(0.1)
 
 		# ── Summary ────────────────────────────────────────────────────────
-		yield sse("summary", {
+		selected_judge = (run_log.get("rounds") or [{}])[-1].get("judge", {}) if run_log.get("rounds") else {}
+		if first_singularity_round is not None:
+			for rr in run_log.get("rounds", []):
+				if rr.get("judge", {}).get("round") == first_singularity_round:
+					selected_judge = rr.get("judge", {})
+					break
+		summary_payload = {
 			"first_singularity_round": first_singularity_round,
 			"conclusion": final_conclusion,
 			"phone_rang": first_singularity_round is not None,
-		})
+			"convergence_state": selected_judge.get("convergence_state", "singularity" if first_singularity_round is not None else "no_singularity"),
+			"ratio_signal": selected_judge.get("ratio_signal", 1 if first_singularity_round is not None else 0),
+			"dominant_compatible_proposal": selected_judge.get("dominant_compatible_proposal"),
+			"partial_convergence_summary": selected_judge.get("partial_convergence_summary"),
+		}
+		run_log["summary"] = summary_payload
+		yield sse("summary", summary_payload)
 
 		yield sse_done()
 
 	except Exception as e:
 		logger.exception("stream_fourCM fatal error")
+		run_log["errors"].append(str(e))
 		yield sse("error", {"message": str(e)})
 		yield sse_done()
 
 	finally:
+		run_log["finished_at"] = datetime.now().isoformat()
+		log_path = _write_run_log(run_log)
+		if log_path:
+			logger.info(f"4CM run log written: {log_path}")
+
 		# Restore original keys
 		os.environ["ANTHROPIC_API_KEY"] = _orig_claude
 		os.environ["XAI_API_KEY"]       = _orig_grok
@@ -617,6 +1104,35 @@ async def run_fourCM(req: FourCMRequest, request: Request):
 	else:
 		_env = os.environ.get("USE_EXTERNAL_API", "true").lower()
 		_is_local = _env in ("false", "0", "no")
+
+	# LLM-based intent triage: the fixed judge decides whether this is a 4CM case,
+	# and whether accountable human review is required. In AI API mode this is Grok;
+	# in Local LLM mode this is the configured internal/local LLM.
+	if not _is_local and not (grok_key or os.environ.get("XAI_API_KEY")):
+		# Grok judge is required for triage in external AI API mode.
+		raise HTTPException(401, "xAI/Grok API key required for judge intent triage")
+
+	intent_triage = await asyncio.to_thread(
+		judge_intent_triage,
+		req,
+		use_external_api=not _is_local,
+		grok_key=grok_key,
+	)
+	# Store triage on the request object dynamically so the stream logger can include it.
+	setattr(req, "_intent_triage", intent_triage)
+
+	if intent_triage.get("simple_assistant_question") or not intent_triage.get("should_run_4cm", True):
+		raise HTTPException(
+			400,
+			{
+				"message": "This prompt should not run through 4CM. Use a normal assistant flow instead.",
+				"intent_triage": intent_triage,
+			},
+		)
+
+	# If the judge sees a high-risk operational decision, force high-risk routing.
+	if intent_triage.get("high_risk") or intent_triage.get("human_review_required"):
+		req.risk_level = "high"
 
 	# Key check: external API key not required in Local LLM mode
 	if not _is_local:
@@ -651,75 +1167,82 @@ async def run_fourCM(req: FourCMRequest, request: Request):
 async def validate_agent(req: ValidateAgentRequest, request: Request):
 	"""
 	POST /fourCM/validate
-	Ask Grok if the proposed agent prompt is sufficiently orthogonal
-	to the other three. Returns {ok: bool, message: str}.
+	Validate and optionally rewrite an edited agent using the fixed judge LLM.
+
+	Routing rule:
+	- AI API mode / USE_EXTERNAL_API=true  -> Grok judge
+	- Local LLM mode / USE_EXTERNAL_API=false -> internal/local judge LLM
 	"""
 	grok_key = request.headers.get("X-Grok-Key", "").strip() or os.environ.get("XAI_API_KEY", "")
-	if not grok_key:
-		raise HTTPException(401, "xAI API key required for validation")
+	use_external = _effective_use_external_api(req.use_external_api)
 
-	others_text = "\n\n".join([
-		f"[Agent {i+1}]: {p[:400]}"
-		for i, p in enumerate(req.other_prompts)
-	])
-
-	system_prompt = (
-		"You are an orthogonality validator for the 4 Councilmen Model (4CM). "
-		"Your job: check whether a proposed agent is genuinely orthogonal to "
-		"the other three agents. "
-		"Orthogonal means: the proposed agent approaches problems from a FUNDAMENTALLY "
-		"DIFFERENT perspective that cannot be subsumed by any of the others. "
-		"Same topic, different angle is fine. Same angle is NOT orthogonal. "
-		"Be strict. Return ONLY a JSON object: "
-		'{"ok": true/false, "message": "one sentence explanation"}'
-	)
-
-	user_message = (
-		f"Proposed new agent:\n"
-		f"Name: {req.name}\n"
-		f"Prompt: {req.prompt[:600]}\n\n"
-		f"Existing three agents:\n{others_text}\n\n"
-		f"Is the proposed agent sufficiently orthogonal to the other three?"
-	)
-
-	headers = {
-		"Authorization": f"Bearer {grok_key}",
-		"Content-Type": "application/json",
-	}
-	payload = {
-		"model": GROK_MODEL,
-		"max_tokens": 200,
-		"temperature": 0.2,
-		"messages": [
-			{"role": "system", "content": system_prompt},
-			{"role": "user",   "content": user_message},
-		],
-	}
+	if use_external and not grok_key:
+		raise HTTPException(401, "xAI/Grok API key required for validation in AI API mode")
 
 	try:
-		resp = await asyncio.to_thread(
-			lambda: requests.post(XAI_API_URL, headers=headers, json=payload, timeout=30)
+		result = await asyncio.to_thread(
+			judge_agent_prompt_validation,
+			req,
+			use_external_api=use_external,
+			grok_key=grok_key,
 		)
-		resp.raise_for_status()
-		body = resp.json()
-		raw = (body.get("choices", [{}])[0].get("message", {}).get("content") or "").strip()
-
-		# strip markdown fences if any
-		if "```" in raw:
-			parts = raw.split("```")
-			raw = parts[1] if len(parts) >= 2 else raw
-			if raw.startswith("json"):
-				raw = raw[4:]
-		raw = raw.strip()
-
-		result = json.loads(raw)
-		return {"ok": result.get("ok", False), "message": result.get("message", "")}
-
-	except json.JSONDecodeError:
-		return {"ok": True, "message": "Validation parsing issue — proceeding with caution."}
+		return result
 	except Exception as e:
 		logger.error(f"Validation error: {e}")
 		raise HTTPException(500, f"Validation failed: {str(e)}")
+
+
+@router.post("/validate-and-save/{set_id}/agent/{agent_idx}")
+async def validate_and_save_agent(set_id: str, agent_idx: int, req: ValidateAgentRequest, request: Request):
+	"""
+	Validate/rewrite an edited agent with the judge LLM, then save it as a local override.
+
+	This endpoint intentionally does NOT edit angry_agents/{set_id}/members.txt or
+	angry_agents/{set_id}/{agent_idx}.txt. User edits are stored in
+	SAVED_AGENTS_FILE, default: angry_agents/_saved_agent_overrides.json.
+	The original scenario files remain immutable defaults; overrides are applied at
+	runtime by _apply_saved_agent_overrides().
+	"""
+	if agent_idx < 1 or agent_idx > 4:
+		raise HTTPException(400, "agent_idx must be 1-4")
+	folder = ANGRY_AGENTS_ROOT / set_id
+	if not folder.exists():
+		raise HTTPException(404, f"Scenario '{set_id}' not found")
+
+	grok_key = request.headers.get("X-Grok-Key", "").strip() or os.environ.get("XAI_API_KEY", "")
+	use_external = _effective_use_external_api(req.use_external_api)
+	if use_external and not grok_key:
+		raise HTTPException(401, "xAI/Grok API key required for validation in AI API mode")
+
+	result = await asyncio.to_thread(
+		judge_agent_prompt_validation,
+		req,
+		use_external_api=use_external,
+		grok_key=grok_key,
+	)
+
+	name = result.get("rewritten_name") or req.name
+	prompt = result.get("rewritten_prompt") or req.prompt
+
+	# Load defaults + any existing local override, update the selected slot, then
+	# persist the full effective set back into _saved_agent_overrides.json.
+	agents = _apply_saved_agent_overrides(set_id, load_agents_from_files(set_id))
+	for a in agents:
+		if int(a.agent_id.split("_")[1]) + 1 == agent_idx:
+			a.name = name
+			a.system_prompt = prompt
+			break
+	_save_agent_overrides(set_id, agents, source="validate-and-save-local-override")
+
+	return {
+		"saved": True,
+		"storage": "local_override_json",
+		"saved_agents_file": str(SAVED_AGENTS_FILE),
+		"base_files_modified": False,
+		"set": set_id,
+		"agent": agent_idx,
+		**result,
+	}
 
 
 @router.get("/agents/{agent_set}")
@@ -729,7 +1252,7 @@ async def get_agent_set(agent_set: str):
 	Return agent names + prompt previews for the UI.
 	"""
 	try:
-		agents = load_agents_from_files(agent_set)
+		agents = _apply_saved_agent_overrides(agent_set, load_agents_from_files(agent_set))
 	except HTTPException:
 		raise
 	except Exception as e:
@@ -1009,7 +1532,7 @@ async def rename_scenario(set_id: str, req: ScenarioRenameRequest):
 async def update_agent(set_id: str, agent_idx: int, req: ScenarioAgentUpdate):
 	"""
 	PUT /fourCM/scenario/{set_id}/agent/{agent_idx}
-	Update a single agent's name and prompt.
+	Save a single agent name/prompt as a local override without editing base files.
 	"""
 	folder = ANGRY_AGENTS_ROOT / set_id
 	if not folder.exists():
@@ -1018,32 +1541,92 @@ async def update_agent(set_id: str, agent_idx: int, req: ScenarioAgentUpdate):
 	if agent_idx < 1 or agent_idx > 4:
 		raise HTTPException(400, "agent_idx must be 1-4")
 
-	# Update prompt file
-	(folder / f"{agent_idx}.txt").write_text(req.prompt, encoding="utf-8")
+	agents = _apply_saved_agent_overrides(set_id, load_agents_from_files(set_id))
+	for a in agents:
+		if int(a.agent_id.split("_")[1]) + 1 == agent_idx:
+			a.name = req.name
+			a.system_prompt = req.prompt
+			break
+	_save_agent_overrides(set_id, agents, source="scenario-agent-update-local-override")
 
-	# Update members.txt
-	members_file = folder / "members.txt"
-	lines = []
-	if members_file.exists():
-		for line in members_file.read_text(encoding="utf-8").splitlines():
-			if ":" in line:
-				idx_str, _ = line.split(":", 1)
-				if idx_str.strip() == str(agent_idx):
-					lines.append(f"{agent_idx}: {req.name}")
-				else:
-					lines.append(line)
-			else:
-				lines.append(line)
-	else:
-		lines = [f"{agent_idx}: {req.name}"]
+	return {
+		"updated": {"set": set_id, "agent": agent_idx, "name": req.name},
+		"storage": "local_override_json",
+		"saved_agents_file": str(SAVED_AGENTS_FILE),
+		"base_files_modified": False,
+	}
 
-	members_file.write_text("\n".join(lines), encoding="utf-8")
 
-	# Clear Korean translation cache for this scenario
-	for ko_file in folder.glob("*.ko.txt"):
-		ko_file.unlink()
+# ── Saved Agent Overrides ─────────────────────────────────────────────────────
 
-	return {"updated": {"set": set_id, "agent": agent_idx, "name": req.name}}
+class SavedAgentSetRequest(BaseModel):
+	agents: List[ScenarioAgentUpdate]
+
+
+@router.get("/saved-agents")
+async def saved_agents_list():
+	"""Return locally persisted agent overrides, if any."""
+	return _read_saved_agents()
+
+
+@router.get("/saved-agents/{set_id}")
+async def saved_agents_get(set_id: str):
+	"""Return the effective saved/default agent list for a scenario."""
+	base = load_agents_from_files(set_id)
+	effective = _apply_saved_agent_overrides(set_id, base)
+	return {
+		"agent_set": set_id,
+		"agents": [
+			{
+				"id": int(a.agent_id.split("_")[1]) + 1,
+				"name": a.name,
+				"prompt": a.system_prompt,
+			}
+			for a in effective
+		],
+	}
+
+
+@router.post("/saved-agents/{set_id}")
+async def saved_agents_save(set_id: str, req: SavedAgentSetRequest):
+	"""Persist a full local override set without editing the base scenario files."""
+	if len(req.agents) != 4:
+		raise HTTPException(400, "Exactly four agents are required")
+	base = load_agents_from_files(set_id)
+	for i, item in enumerate(req.agents):
+		base[i].name = item.name
+		base[i].system_prompt = item.prompt
+	_save_agent_overrides(set_id, base, source="saved-agents-api")
+	return {"saved": True, "agent_set": set_id, "count": 4}
+
+
+@router.delete("/saved-agents/{set_id}")
+async def saved_agents_delete(set_id: str):
+	"""Remove local overrides so the scenario falls back to files."""
+	data = _read_saved_agents()
+	sets = data.setdefault("sets", {})
+	deleted = bool(sets.pop(set_id, None))
+	_write_saved_agents(data)
+	return {"deleted": deleted, "agent_set": set_id}
+
+
+@router.get("/risk-policy")
+async def risk_policy():
+	"""Human-readable policy hints for simple prompts and GDPR tier handling."""
+	return {
+		"simple_prompt_gate": "Low-stakes/simple prompts are rejected before a 4CM run.",
+		"judge_llm_routing": {
+			"AI_API_mode": "Grok performs intent triage, human-review classification, semantic judging, and prompt validation/rewrite.",
+			"Local_LLM_mode": "The configured internal/local LLM performs intent triage, human-review classification, semantic judging, and prompt validation/rewrite.",
+		},
+		"gdpr_four_stage": {
+			"1": "Low risk: transparency, notice, lawful basis, retention clarity; no extreme agent escalation by default.",
+			"2": "Moderate/high-but-manageable risk: maximum transparency plus proportional safeguards; human review only when the user's intent is an operational or consequential decision request.",
+			"3": "High risk: DPIA-style review, adversarial privacy/security/legal agents, and accountable human review.",
+			"4": "Very high or unacceptable risk: stop/hold deployment recommendation unless mitigations and accountable human approval exist.",
+		},
+		"intent_triage": "Before a 4CM run, the judge LLM classifies whether the user is asking a simple assistant question, an analysis, or an operational decision that requires human review.",
+	}
 
 # ── API Key Management ────────────────────────────────────────────────────────
 

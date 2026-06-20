@@ -111,6 +111,19 @@ These are INDEPENDENT axes. It is possible to have:
 You must be brutally honest. Do not be fooled by superficial agreement.
 But also do not miss CONSTRAINT CONVERGENCE by demanding identical wording or logic.
 
+After scoring, classify the DECISION STATE. Do not equate the torus ratio with the final state.
+The backend may later compute a binary torus signal from your scores, but you must still explain the actual state.
+
+Use exactly one convergence_state:
+- "singularity": all 4 agents converge into one executable conclusion, or all 4 constraints are mutually satisfiable by one solution.
+- "partial_convergence": only 2 or 3 agents converge, while at least one agent materially dissents or remains outside the shared position. If a mathematical ratio would look like singularity but only a subset actually converged, this is partial_convergence, not singularity.
+- "dominant_compatible_proposal": full singularity failed, but a majority or coherent coalition creates an actionable proposal that preserves the dissenting view and can be sent to human review.
+- "no_singularity": no coherent executable common proposal exists.
+
+Distinguish carefully:
+- partial_convergence = a subset agrees, but the proposal is not yet a robust integrated action.
+- dominant_compatible_proposal = a subset or majority produces a practical, compatible, defensible action even though one or more agents dissent.
+
 Output ONLY a JSON object with exactly these fields:
 {
   "conclusion_convergence": <float 0.0-1.0>,
@@ -119,7 +132,13 @@ Output ONLY a JSON object with exactly these fields:
   "all_point_same_direction": <true/false — based on conclusion_convergence >= 0.5>,
   "common_conclusion": "<what all 4 are concluding, in one sentence, or null>",
   "weakest_link": "<which agent diverges most and on which axis>",
-  "convergence_analysis": "<2-3 sentences explaining both axes>"
+  "convergence_state": "singularity|partial_convergence|dominant_compatible_proposal|no_singularity",
+  "coalition_agents": ["<agent names that support the shared or dominant position>"],
+  "dissenting_agents": ["<agent names that materially dissent or block full singularity>"],
+  "dominant_compatible_proposal": "<actionable proposal if available, otherwise null>",
+  "partial_convergence_summary": "<subset convergence summary if available, otherwise null>",
+  "why_this_state": "<why this state is not merely ratio=1 or ratio=0>",
+  "convergence_analysis": "<2-3 sentences explaining both axes and the state>"
 }
 
 No other text. No markdown. Just the JSON."""
@@ -219,6 +238,12 @@ def semantic_compare(responses: Dict[str, str], query: str,
 						  result.get("semantic_similarity_score", 0.0))
 		result.setdefault("semantic_similarity_score",
 						  (result["conclusion_convergence"] + result["reasoning_convergence"]) / 2)
+		result.setdefault("convergence_state", "no_singularity")
+		result.setdefault("coalition_agents", [])
+		result.setdefault("dissenting_agents", [])
+		result.setdefault("dominant_compatible_proposal", None)
+		result.setdefault("partial_convergence_summary", None)
+		result.setdefault("why_this_state", result.get("convergence_analysis", ""))
 		return result
 
 	# ── Existing Grok judge path (USE_EXTERNAL_API=True, unchanged) ──────────
@@ -295,6 +320,12 @@ def semantic_compare(responses: Dict[str, str], query: str,
 					  result.get("semantic_similarity_score", 0.0))
 	result.setdefault("semantic_similarity_score",
 					  (result["conclusion_convergence"] + result["reasoning_convergence"]) / 2)
+	result.setdefault("convergence_state", "no_singularity")
+	result.setdefault("coalition_agents", [])
+	result.setdefault("dissenting_agents", [])
+	result.setdefault("dominant_compatible_proposal", None)
+	result.setdefault("partial_convergence_summary", None)
+	result.setdefault("why_this_state", result.get("convergence_analysis", ""))
 
 	return result
 
