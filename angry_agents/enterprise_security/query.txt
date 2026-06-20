@@ -1,1 +1,0 @@
-A company is replacing HTTP intranet access and many endpoint agents with HTTPS zero-trust access. Should it proceed now, phase the change, or keep the old architecture?
