@@ -11,7 +11,7 @@
 
 Built for organizations that must demonstrate **independent review, human oversight support, and documented decision trails** for AI-assisted decisions — deployable **fully on-premises and air-gapped**, with no data ever leaving your infrastructure.
 
-**Version 2.1.0** · PhD Dissertation, 2011 · Hybrid Prototype, 2026
+**Version 2.1.1** · PhD Dissertation, 2011 · Hybrid Prototype, 2026
 📖 **[Full User Manual (PDF)](https://klastrovanie-shared-temp.s3.fr-par.scw.cloud/manuals/4CM_Prudentia_User_Manual.pdf)**
 
 ---
