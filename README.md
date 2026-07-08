@@ -179,6 +179,9 @@ This code is released to encourage collaboration across AI systems — not compe
 
 Copyright © 2026 Klastrovanie Co., Ltd. All rights reserved.
 
+## Live Demo 
+https://klastrovanie.github.io/4councilmen/   
+
 ## Theory & Research Background
 
 Original theory: 4 Councilmen Model (4CM) — Author's PhD Dissertation, 2011
