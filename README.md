@@ -1,9 +1,11 @@
 # KlastroHeron Decision Intelligence — Prudentia (4CM)
 ### On-Premise Multi-Agent Decision Layer
 
+[![Available on AWS Marketplace](https://img.shields.io/badge/AWS%20Marketplace-Available-FF9900?logo=amazonaws&logoColor=white)](https://aws.amazon.com/marketplace/pp/prodview-jruqxhnin7gwu)
+
 **First Public Release of 4CM:** 2026-03-09  
 **First Public Release of Prudentia Branch:** 2026-05-19  
-**Last Updated:** 2026-07-02
+**Last Updated:** 2026-09-24
 
 > *"Four models that never agree — until they do."*
 
@@ -171,9 +173,12 @@ Prudentia / 4CM is **dual-licensed**.
 
 **Open source (AGPL-3.0).** You may use, modify, and deploy this software — including commercially — under the terms of the GNU Affero General Public License v3. Note that AGPL's copyleft applies to network use: if you offer this software, or a product that incorporates it, as a service over a network, you must make the complete corresponding source of that combined work available under AGPL-3.0.
 
-**Commercial license.** For organizations that cannot meet AGPL obligations — e.g., embedding 4CM in proprietary products or SaaS platforms without source disclosure, or on-premise deployment free of copyleft obligations — Klastrovanie Co., Ltd. offers commercial and OEM licenses, including deployment support and integration assistance.
+**Commercial license.** For organizations that cannot meet AGPL obligations — e.g., embedding 4CM in proprietary products or SaaS platforms without source disclosure, or on-premise deployment free of copyleft obligations — Klastrovanie Co., Ltd. offers commercial and OEM licenses, including deployment support and integration assistance. The commercial edition on AWS Marketplace is the Cloud / MCP Server Edition (v3.0.0), re-architected to run on Amazon Bedrock via AWS IAM. It differs from this on-premise AGPL edition (external API keys, web UI).
 
-📧 Commercial licensing & OEM inquiries: **contact@klastrovanie.com**
+The commercial version (v3.0.0) is now available on AWS Marketplace.  
+**[View on AWS Marketplace →](https://aws.amazon.com/marketplace/pp/prodview-jruqxhnin7gwu)**
+
+📧 Commercial licensing & OEM inquiries (private offer): **contact@klastrovanie.com**
 
 This code is released to encourage collaboration across AI systems — not competition. The goal is shared solutions, not shared resources.
 
