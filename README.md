@@ -187,8 +187,8 @@ This code is released to encourage collaboration across AI systems — not compe
 
 Copyright © 2026 Klastrovanie Co., Ltd. All rights reserved.
 
-## Live Demo 
-https://klastrovanie.github.io/4councilmen/   
+## Live Demo (Now on the home page)
+https://www.klastrovanie.com/demo/
 
 ## Theory & Research Background
 
